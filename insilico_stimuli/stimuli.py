@@ -2536,3 +2536,2279 @@ class PlaidsGratingSet(CenterSurround):
 
         return plaid
 
+class PartGratingSet(StimuliSet):
+    """
+    A class to generate Grating stimuli as sinusoidal gratings where part of it is cropped off.
+    """
+    def __init__(self, canvas_size, locations, sizes, spatial_frequencies, contrasts, orientations, phases, grey_levels,
+                 displacement, rotation_angle, eccentricities=None, pixel_boundaries=None, relative_sf=None):
+        """
+        Args:
+            canvas_size (list of int): The canvas size [width, height].
+            locations (list of list): specifies the center position of the Gabor. Can be either of type list or an
+                object from parameters.py module. This module has 3 relevant classes: FiniteParameter, FiniteSelection,
+                and UniformRange. FiniteParameter objects will be treated exactely like lists. FiniteSelection objects
+                will generate n samples from the given list of values from a probability mass function. UniformRange
+                objects will sample from a continuous distribution within the defined parameter ranges. If location is
+                of type UniformRange, there cannot be an additional argument for the cumulative density distribution.
+            sizes (list of float): determines the size of the Gabor envelope in direction of the longer axis of the
+                ellipse. It is measured in pixels (pixel radius). The size corresponds to 4*SD of the Gaussian envelope
+                (+/- 2 SD of envelope). Can be either of type list or an object from parameters.py module.
+            spatial_frequencies (list of float): the inverse of the wavelength of the cosine factor entered in
+                [cycles / pixel]. Can be either of type list or an object from parameters.py module. By setting the
+                parameter 'relative_sf'=True, the spatial frequency depends on size, namely [cycles / envelope]. In
+                this case, the value for the spatial frequency reflects how many periods fit into the length of 'size'
+                from the center. In order to prevent the occurrence of undesired effects at the image borders, the
+                wavelength value should be smaller than one fifth of the input image size. Also, the Nyquist-frequency
+                should not be exceeded to avoid undesired sampling artifacts.
+            contrasts (list of float): defines the amplitude of the stimulus in %. Takes values from 0 to 1. E.g., for a
+                grey_level=-0.2 and pixel_boundaries=[-1,1], a contrast of 1 (=100%) means the amplitude of the Gabor
+                stimulus is 0.8. Can be either of type list or an object from parameters.py module.
+            orientations (list of float): determines the orientation of the normal to the parallel stripes of a Gabor
+                function. Its values are given in [rad] and can range from [0, pi). Can be either of type list or an
+                object from parameters.py module.
+            phases (list of float): determines the phase offset in the cosine factor of the Gabor function. Its values
+                are given in [rad] and can range from [0, 2*pi). Can be either of type list or an object from
+                parameters.py module.
+            grey_levels (list of float): determines the mean luminance (pixel value) of the image. Can be either of type
+                list or an object from parameters.py module.
+            displacement (float): determines the displacement from the middle of the Gabor where the cropping line is
+                placed and rotated. Takes values from [-1, 1] where a negative value displaces to the left, a positive
+                value to the right.
+            rotation_angle (float): determines the rotation of the cropping line. The unit is radians.
+            eccentricities (list of float): object from parameters.py module, determining the ellipticity of the Gabor.
+                Takes values from [0, 1]. Default is 0 (circular Gabor). Can be either of type list or an object from
+                parameters.py module.
+            pixel_boundaries (list or None): Range of values the monitor can display [lower value, upper value]. Default
+                is [-1,1].
+            relative_sf (bool or None): Scale 'spatial_frequencies' by size (True) or use absolute units
+                (False, default).
+        """
+        # input dictionary (used for: 'find_optimal_stimulus_bruteforce' and '_parameter_converter')
+        self.arg_dict = locals().copy()
+        rn.seed(None)  # truely pseudo-random samples
+
+        # Treat all the 'non-stimulus-oriented' arguments
+        # canvas_size
+        if type(canvas_size) is list:
+            self.canvas_size = canvas_size
+        else:
+            raise TypeError('canvas_size must be of type list.')
+
+        # pixel_boundaries
+        if pixel_boundaries is None:
+            self.pixel_boundaries = [-1, 1]
+        elif type(pixel_boundaries) is list:
+            self.pixel_boundaries = pixel_boundaries
+        else:
+            raise TypeError('pixel_boundaries must be of type list.')
+
+        # relative_sf
+        if relative_sf is None:
+            self.relative_sf = False
+        elif type(relative_sf) is bool:
+            self.relative_sf = relative_sf
+        else:
+            raise TypeError('relative_sf must be of type bool.')
+
+        # Treat all the 'stimulus-oriented' arguments
+        # locations
+        if isinstance(locations, list):
+            self.locations = locations
+        elif isinstance(locations, FiniteSelection):
+            sample = locations.sample()
+            if isinstance(sample, list):
+                self.locations = sample
+            else:
+                raise TypeError("locations.sample() must be of type list.")
+        elif isinstance(locations, FiniteParameter):
+            if type(locations.values) is list:
+                if all(isinstance(loc, list) for loc in locations.values):
+                    self.locations = locations.values
+                else:
+                    raise TypeError('all list entries in locations.values have to be lists.')
+            else:
+                raise TypeError('locations.values has to be a list of lists.')
+        elif isinstance(locations, UniformRange):
+            sample = locations.sample()
+            if isinstance(sample, list):
+                self.locations = sample
+            else:
+                raise TypeError("locations.sample() must be of type list.")
+            if isinstance(locations.range, list):
+                self.locations_range = locations.range
+            else:
+                raise TypeError("locations.range must be of type list.")
+
+        # eccentricities
+        if eccentricities is None:
+            self.gammas = [1.0]  # default
+        elif isinstance(eccentricities, list):
+            self.gammas = [1 - e ** 2 for e in eccentricities]
+        else:
+            if isinstance(eccentricities, FiniteSelection):
+                sample = eccentricities.sample()
+                if isinstance(sample, list):
+                    self.gammas = [1 - e ** 2 for e in sample]
+                else:
+                    raise TypeError("eccentricities.sample() must be of type list.")
+            elif isinstance(eccentricities, FiniteParameter):
+                if type(eccentricities.values) is list:
+                    self.gammas = [1 - e ** 2 for e in eccentricities.values]
+                else:
+                    raise TypeError('eccentricities.values must be of type list.')
+            elif isinstance(eccentricities, UniformRange):
+                sample = eccentricities.sample()
+                if isinstance(sample, list):
+                    self.gammas = [1 - e ** 2 for e in sample]
+                else:
+                    raise TypeError("eccentricities.sample() must be of type list.")
+                if isinstance(eccentricities.range, list):
+                    self.gammas_range = [1 - e ** 2 for e in eccentricities.range[::-1]]
+                else:
+                    raise TypeError("eccentricities.range must be of type list.")
+
+        # read out the other inputs and store them as attributes
+        self._parameter_converter()
+
+        # For this class search methods, we want to get the parameters in an ax-friendly format
+        type_check = []
+        for arg in self.arg_dict:
+            if eccentricities is None:
+                if arg in ["self", "canvas_size", "pixel_boundaries", "relative_sf", "eccentricities"]:
+                    pass
+                else:
+                    type_check.append(isinstance(self.arg_dict[arg], (FiniteParameter, FiniteSelection, UniformRange)))
+            else:
+                if arg in ["self", "canvas_size", "pixel_boundaries", "relative_sf"]:
+                    pass
+                else:
+                    type_check.append(isinstance(self.arg_dict[arg], (FiniteParameter, FiniteSelection, UniformRange)))
+        if all(type_check):
+            self.auto_params = self._param_dict_for_search(locations=locations,
+                                                           sizes=sizes,
+                                                           spatial_frequencies=spatial_frequencies,
+                                                           contrasts=contrasts,
+                                                           orientations=orientations,
+                                                           phases=phases,
+                                                           gammas=eccentricities,
+                                                           grey_levels=grey_levels,
+                                                           displacement=displacement,
+                                                           rotation_angle=rotation_angle)
+
+    def params(self):
+        """ finite method, aranging the parameters in a list of tuples. """
+        return [
+            (self.locations, 'location'),
+            (self.sizes, 'size'),
+            (self.spatial_frequencies, 'spatial_frequency'),
+            (self.contrasts, 'contrast'),
+            (self.orientations, 'orientation'),
+            (self.phases, 'phase'),
+            (self.gammas, 'gamma'),
+            (self.grey_levels, 'grey_level'),
+            (self.displacement, 'displacement'),
+            (self.rotation_angle, 'rotation_angle')
+        ]
+
+    def params_from_idx(self, idx):
+        """ returns the parameter combination for a desired image index from an enumerable set of images. """
+        num_params = self.num_params()
+        c = np.unravel_index(idx, num_params)
+        params = [p[0][c[i]] for i, p in enumerate(self.params())]
+        # Caution changing the class methods: it is crucial that the index of params matches the correct parameter
+        if self.relative_sf:
+            params[2] /= params[1]  # params[2] is spatial_frequency and params[1] is size.
+        return params
+
+    def _parameter_converter(self):
+        """ Reads out the type of all the ordinary input arguments and converts them to attributes. """
+        for arg_key in self.arg_dict:
+            arg_value = self.arg_dict[arg_key]
+            if arg_key in ["canvas_size", "pixel_boundaries", "locations", "relative_sf", "eccentricities", "self"]:
+                pass  # exceptions
+            else:  # sizes, spatial_frequencies, contrasts, orientations, phases, grey_levels
+                if isinstance(arg_value, list):
+                    setattr(self, arg_key, arg_value)
+                elif isinstance(arg_value, FiniteSelection):
+                    sample = arg_value.sample()  # random sample of n values specified in sizes
+                    if isinstance(sample, list):
+                        setattr(self, arg_key, sample)
+                    else:
+                        raise TypeError("{}.sample() must be of type list.".format(arg_key))
+                elif isinstance(arg_value, FiniteParameter):
+                    if isinstance(arg_value.values, list):
+                        setattr(self, arg_key, arg_value.values)
+                    else:
+                        raise TypeError("{}.values must be of type list.".format(arg_key))
+                elif isinstance(arg_value, UniformRange):
+                    sample = arg_value.sample()
+                    if isinstance(sample, list):
+                        setattr(self, arg_key, sample)
+                    else:
+                        raise TypeError("{}.sample() must be of type list.".format(arg_key))
+                    if isinstance(arg_value.range, list):
+                        setattr(self, arg_key + "_range", arg_value.range)
+                    else:
+                        raise TypeError("{}.range must be of type list.".format(arg_key))
+
+    def stimulus(self, location, size, spatial_frequency, contrast, orientation, phase, gamma, grey_level,
+                 displacement, rotation_angle, **kwargs):
+        """
+        Args:
+            location (list of float): The center position of the Gabor.
+            size (float): The length of the longer axis of the ellipse of the Gabor envelope.
+            spatial_frequency (float): The inverse of the wavelength of the cosine factor.
+            contrast (float): Defines the amplitude of the stimulus in %. Takes values from 0 to 1.
+            orientation (float): The orientation of the normal to the parallel stripes.
+            phase (float): The phase offset of the cosine factor.
+            gamma (float): The spatial aspect ratio reflecting the ellipticity of the Gabor.
+            grey_level (float): The mean luminance.
+            displacement (float): The displacement of the cropping line.
+            rotation_angle (float): The rotation angle.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns: Image of the desired part-Grating stimulus as numpy.ndarray.
+        """
+        # basic coordinates
+        x, y = np.meshgrid(np.arange(self.canvas_size[0]),
+                           np.arange(self.canvas_size[1]))        
+        coords = np.stack([x.flatten(), y.flatten()])
+
+        # coordinates for grating (location2)
+        coords_grating = coords - np.array(location)[:, None]
+
+        # define grating
+        R = np.array([[np.cos(orientation), -np.sin(orientation)],
+                             [np.sin(orientation),  np.cos(orientation)]])
+        x, y = R.dot(coords_grating).reshape((2, ) + x.shape)        
+
+        grating = np.cos(spatial_frequency * x * (2*np.pi) + phase)
+        
+        # add contrast
+        amplitude = contrast * min(abs(self.pixel_boundaries[0] - grey_level),
+                                abs(self.pixel_boundaries[1] - grey_level))        
+        grating_contrast = amplitude * grating
+
+        # add mask for envelope    
+        norm_xy = np.sqrt(x ** 2 + y ** 2)
+        envelope = (norm_xy <= size/2)
+        
+        complete = envelope * grating_contrast
+
+        # add cut
+        grid = np.array(np.meshgrid(np.arange(0,self.canvas_size[0]),
+                                    np.arange(0,self.canvas_size[1])))
+
+        vector = [np.cos(rotation_angle),np.sin(rotation_angle)]
+        v_1 = np.array([vector[1], -vector[0]])
+        position = np.array(v_1*size/2*displacement+location)
+
+        # hint: einsum seems to rotate the vector such that it is orthogonal to v_1
+        mask = (np.einsum('nm,mkl->nkl',v_1[None,:],grid-position[:,None,None])>0) & (envelope)
+        complete[mask[0]] = grey_level
+        
+        return complete
+
+    def _param_dict_for_search(self, locations, sizes, spatial_frequencies, contrasts, orientations, phases, gammas,
+                               grey_levels, displacement, rotation_angle):
+        """
+        Create a dictionary of all Gabor parameters to an ax-friendly format.
+
+        Args:
+            locations: object from parameters.py module, defining the center of stimulus.
+            sizes: object from parameters.py module, defining the size of the Gaussian envelope.
+            spatial_frequencies: object from parameters.py module, defining the spatial frequency of grating.
+            contrasts: object from parameters.py module, defining the contrast of the image.
+            orientations: object from parameters.py module, defining the orientation of grating relative to envelope.
+            phases: object from parameters.py module, defining the phase offset of the grating.
+            gammas: object from parameters.py module, defining the spatial aspect ratio parameter of the envelope.
+            grey_levels: object from parameters.py module, defining the mean pixel intensity of the stimulus.
+            displacement (float): The displacement of the cropping line.
+            rotation_angle (float): The rotation rotation_angle.
+
+        Returns:
+            dict of dict: dictionary of all parameters and their respective attributes, i.e. 'name, 'type', 'bounds' and
+                'log_scale'.
+        """
+        rn.seed(None)  # truely random samples
+
+        arg_dict = locals().copy()
+        del arg_dict['self']
+
+        param_dict = {}
+        for arg_key in arg_dict:
+            # eccentricities/gammas should be a log_scale parameter, all others not.
+            if arg_key in ["gammas"]:
+                log_scale = True
+            else:
+                log_scale = False
+
+            # 1.) "finite case" -> 'type' = choice (more than one value) or 'type' = fixed (only one value)
+            if isinstance(arg_dict[arg_key], FiniteParameter) or isinstance(arg_dict[arg_key], FiniteSelection):
+
+                # define the type configuration based on the number of list elements
+                if type(getattr(self, arg_key)) is list:
+                    if len(getattr(self, arg_key)) > 1:
+                        name_type = "choice"
+                    else:
+                        name_type = "fixed"
+
+                if arg_key == 'locations':  # exception handling #1: locations
+                    if name_type == "choice":
+                        # width
+                        name_width = arg_key[:-1] + "_width"
+                        param_dict[name_width] = {"name": name_width,
+                                                  "type": name_type,
+                                                  "values": [float(loc[0]) for loc in getattr(self, arg_key)],
+                                                  "log_scale": log_scale}
+                        # height
+                        name_height = arg_key[:-1] + "_height"
+                        param_dict[name_height] = {"name": name_height,
+                                                   "type": name_type,
+                                                   "values": [float(loc[1]) for loc in getattr(self, arg_key)],
+                                                   "log_scale": log_scale}
+                    elif name_type == "fixed":
+                        # width
+                        name_width = arg_key[:-1] + "_width"
+                        param_dict[name_width] = {"name": name_width,
+                                                  "type": name_type,
+                                                  "value": [float(loc[0]) for loc in getattr(self, arg_key)][0]}
+                        # height
+                        name_height = arg_key[:-1] + "_height"
+                        param_dict[name_height] = {"name": name_height,
+                                                   "type": name_type,
+                                                   "value": [float(loc[1]) for loc in getattr(self, arg_key)][0]}
+                elif arg_key == 'spatial_frequencies':  # exception handling #2: spatial_frequencies
+                    name = 'spatial_frequency'
+                    if name_type == "choice":
+                        param_dict[name] = {"name": name,
+                                            "type": name_type,
+                                            "values": getattr(self, arg_key),
+                                            "log_scale": log_scale}
+                    elif name_type == "fixed":
+                        param_dict[name] = {"name": name,
+                                            "type": name_type,
+                                            "value": getattr(self, arg_key)[0]}
+                else:
+                    name = arg_key[:-1]
+                    if name_type == "choice":
+                        param_dict[name] = {"name": name,
+                                            "type": name_type,
+                                            "values": getattr(self, arg_key),
+                                            "log_scale": log_scale}
+                    elif name_type == "fixed":
+                        param_dict[name] = {"name": name,
+                                            "type": name_type,
+                                            "value": getattr(self, arg_key)[0]}
+
+            # 2.) "infinite case" -> 'type' = range
+            elif isinstance(arg_dict[arg_key], UniformRange):
+                if arg_key == 'locations':
+                    range_name = arg_key + '_range'
+                    # width
+                    name_width = arg_key[:-1] + "_width"
+                    param_dict[name_width] = {"name": name_width,
+                                              "type": "range",
+                                              "bounds": getattr(self, range_name)[0],
+                                              "log_scale": log_scale}
+                    # height
+                    name_height = arg_key[:-1] + "_height"
+                    param_dict[name_height] = {"name": name_height,
+                                               "type": "range",
+                                               "bounds": getattr(self, range_name)[1],
+                                               "log_scale": log_scale}
+                elif arg_key == 'spatial_frequencies':
+                    name = 'spatial_frequency'
+                    range_name = arg_key + "_range"
+                    param_dict[name] = {"name": name,
+                                        "type": "range",
+                                        "bounds": getattr(self, range_name),
+                                        "log_scale": log_scale}
+                else:
+                    name = arg_key[:-1]
+                    range_name = arg_key + "_range"
+                    param_dict[name] = {"name": name,
+                                        "type": "range",
+                                        "bounds": getattr(self, range_name),
+                                        "log_scale": log_scale}
+
+            if gammas is None:
+                param_dict['gamma'] = {'name': 'gamma',
+                                       'type': 'fixed',
+                                       'value': 1.0}
+        return param_dict
+
+    def get_image_from_params(self, auto_params):
+        """
+        Generates the Gabor corresponding to the parameters given in auto_params.
+
+        Args:
+            auto_params (dict): A dictionary which has the parameter names as keys and their realization as values, i.e.
+                {'location_width': value1, 'location_height': value2, 'size': value3, 'spatial_frequency' : ...}
+
+        Returns:
+            numpy.array: Pixel intensities of the desired Gabor stimulus.
+
+        """
+        auto_params_copy = auto_params.copy()
+        auto_params_copy['location'] = [auto_params_copy['location_width'], auto_params_copy['location_height']]
+        del auto_params_copy['location_width'], auto_params_copy['location_height']
+        return self.stimulus(**auto_params_copy)
+
+    def train_evaluate(self, auto_params, model, data_key, unit_idx):
+        """
+        Evaluates the activation of a specific neuron in an evaluated (e.g. nnfabrik) model given the Gabor parameters.
+
+        Args:
+            auto_params (dict): A dictionary which has the parameter names as keys and their realization as values, i.e.
+                {'location_width': value1, 'location_height': value2, 'size': value3, 'spatial_frequency' : ...}
+            model (Encoder): evaluated model (e.g. nnfabrik) of interest.
+            data_key (str): session ID.
+            unit_idx (int): index of the desired model neuron.
+
+        Returns:
+            float: The activation of the Gabor image of the model neuron specified in unit_idx.
+        """
+        auto_params_copy = auto_params.copy()
+        image = self.get_image_from_params(auto_params_copy)
+        image_tensor = torch.tensor(image).expand(1, 1, self.canvas_size[1], self.canvas_size[0]).float()
+        activation = model(image_tensor, data_key=data_key).detach().numpy().squeeze()
+        return float(activation[unit_idx])
+
+    def find_optimal_stimulus(self, model, data_key, unit_idx, total_trials=30):
+        """
+        Runs Bayesian parameter optimization to find optimal Gabor (refer to https://ax.dev/docs/api.html).
+
+        Args:
+            model (Encoder): the underlying model of interest.
+            data_key (str): session ID of model.
+            unit_idx (int): unit index of desired neuron.
+            total_trials (int or None): number of optimization steps (default is 30 trials).
+
+        Returns
+            - list of dict: The list entries are dictionaries which store the optimal parameter combinations for the
+            corresponding unit. It has the variable name in the key and the optimal value in the values, i.e.
+            [{'location_width': value1, 'location_height': value2, 'size': value3, ...}, ...]
+            - list of tuple: The unit activations of the found optimal Gabor of the form [({'activation': mean_unit1},
+            {'activation': {'activation': sem_unit1}}), ...].
+        """
+        if not hasattr(self, "auto_params"):
+            raise TypeError("find_optimal_stimulus search method only supports input parameters from module "
+                            "parameters.py")
+
+        parameters = list(self.auto_params.values())
+
+        # define helper function as input to 'optimize'
+        def train_evaluate_helper(auto_params):
+            return partial(self.train_evaluate, model=model, data_key=data_key, unit_idx=unit_idx)(auto_params)
+
+       # run Bayesian search
+        best_params, values, _, _ = optimize(parameters=parameters.copy(),
+                                             evaluation_function=train_evaluate_helper,
+                                             objective_name='activation',
+                                             total_trials=total_trials)
+        return best_params, values
+
+    def find_optimal_stimulus_bruteforce(self, model, data_key, batch_size=100, return_activations=False, unit_idx=None,
+                                         plotflag=False):
+        """
+        Finds optimal parameter combination for all units based on brute force testing method.
+
+        Args:
+            model (Encoder): The evaluated model as an encoder class.
+            data_key (char): data key or session ID of model.
+            batch_size (int or optional): number of images per batch.
+            return_activations (bool or None): return maximal activation alongside its parameter combination
+            unit_idx (int or None): unit index of the desired model neuron. If not specified, return the best
+                parameters for all model neurons (advised, because search is done for all units anyway).
+            plotflag (bool or None): if True, plots the evolution of the maximal activation of the number of images
+                tested (default: False).
+
+        Returns
+            - params (list of dict): The optimal parameter settings for each of the different units
+            - max_activation (np.array of float): The maximal firing rate for each of the units over all images tested
+        """
+        if any([isinstance(par, UniformRange) for par in list(self.arg_dict.values())]):
+            raise TypeError('This method needs inputs of type FiniteParameter or FiniteSelection.')
+
+        n_images = np.prod(self.num_params())  # number of all parameter combinations
+        n_units = model.readout[data_key].outdims  # number of units
+
+        max_act_evo = np.zeros((n_images + 1, n_units))  # init storage of maximal activation evolution
+        activations = np.zeros(n_units)  # init activation array for all tested images
+        
+        model.cuda()
+
+        # divide set of images in batches before showing it to the model
+        for batch_idx, batch in enumerate(self.image_batches(batch_size)):
+
+            if batch.shape[0] != batch_size:
+                batch_size = batch.shape[0]
+                
+            # create images and compute activation for current batch
+            images_batch = batch.reshape((batch_size,) + tuple(self.canvas_size))
+            images_batch = np.expand_dims(images_batch, axis=1)
+            images_batch = torch.tensor(images_batch).float().cuda()
+            activations_batch = model(images_batch, data_key=data_key).cpu().detach().numpy().squeeze()
+
+            if plotflag:  # evolution of maximal activation
+                for unit in range(0, n_units):
+                    for idx, act in enumerate(activations_batch):
+                        i = (idx + 1) + batch_idx * batch_size
+                        max_act_evo[i, unit] = max(act[unit], max_act_evo[i - 1, unit])
+
+            # max and argmax for current batch
+            activations = np.vstack([activations, activations_batch])
+
+        # delete the first row (only zeros) by which we initialized
+        activations = np.delete(activations, 0, axis=0)
+
+        # get maximal activations for each unit
+        max_activations = np.amax(activations, axis=0)
+
+        # get the image index of the maximal activations
+        argmax_activations = np.argmax(activations, axis=0)
+
+        params = [None] * n_units  # init list with parameter dictionaries
+        for unit, opt_param_idx in enumerate(argmax_activations):
+            params[unit] = self.params_dict_from_idx(opt_param_idx)
+
+        # plot the evolution of the maximal activation for each additional image
+        if plotflag:
+            fig, ax = plt.subplots()
+            for unit in range(0, n_units):
+                ax.plot(np.arange(0, n_images + 1), max_act_evo[:, unit])
+            plt.xlabel('Number of Images')
+            plt.ylabel('Maximal Activation')
+
+        # catch return options
+        if unit_idx is not None:
+            if return_activations:
+                return params[unit_idx], activations[unit_idx], max_activations[unit_idx]
+            else:
+                return params[unit_idx], activations[unit_idx]
+        else:
+            if return_activations:
+                return params, activations, max_activations
+            else:
+                return params, activations
+            
+
+class HiLoGratingSet(StimuliSet):
+    """
+    A class to generate Grating stimuli as sinusoidal gratings which consists of two seperately tuned parts.
+    """
+    def __init__(self, canvas_size, locations, sizes, spatial_frequencies1, spatial_frequencies2, contrasts1, contrasts2,
+                 orientations1, orientations2, phases1, phases2, grey_levels, displacement, rotation_angle, 
+                 eccentricities=None, pixel_boundaries=None, relative_sf=None):
+        """
+        Args:
+            canvas_size (list of int): The canvas size [width, height].
+            locations (list of list): specifies the center position of the Gabor. Can be either of type list or an
+                object from parameters.py module. This module has 3 relevant classes: FiniteParameter, FiniteSelection,
+                and UniformRange. FiniteParameter objects will be treated exactely like lists. FiniteSelection objects
+                will generate n samples from the given list of values from a probability mass function. UniformRange
+                objects will sample from a continuous distribution within the defined parameter ranges. If location is
+                of type UniformRange, there cannot be an additional argument for the cumulative density distribution.
+            sizes (list of float): determines the size of the Gabor envelope in direction of the longer axis of the
+                ellipse. It is measured in pixels (pixel radius). The size corresponds to 2*SD of the Gaussian envelope
+                (+/- SD of envelope). Can be either of type list or an object from parameters.py module.
+            spatial_frequencies (list of float): [1 for the first half of the grating, and 2 for the second half of 
+                the grating] the inverse of the wavelength of the cosine factor entered in
+                [cycles / pixel]. Can be either of type list or an object from parameters.py module. By setting the
+                parameter 'relative_sf'=True, the spatial frequency depends on size, namely [cycles / envelope]. In
+                this case, the value for the spatial frequency reflects how many periods fit into the length of 'size'
+                from the center. In order to prevent the occurrence of undesired effects at the image borders, the
+                wavelength value should be smaller than one fifth of the input image size. Also, the Nyquist-frequency
+                should not be exceeded to avoid undesired sampling artifacts.
+            contrasts (list of float): [1 for the first half of the grating, and 2 for the second half of 
+                the grating] defines the amplitude of the stimulus in %. Takes values from 0 to 1. E.g., for a
+                grey_level=-0.2 and pixel_boundaries=[-1,1], a contrast of 1 (=100%) means the amplitude of the Gabor
+                stimulus is 0.8. Can be either of type list or an object from parameters.py module.
+            orientations (list of float): [1 for the first half of the grating, and 2 for the second half of 
+                the grating] determines the orientation of the normal to the parallel stripes of a Gabor
+                function. Its values are given in [rad] and can range from [0, pi). Can be either of type list or an
+                object from parameters.py module.
+            phases (list of float): [1 for the first half of the grating, and 2 for the second half of 
+                the grating] determines the phase offset in the cosine factor of the Gabor function. Its values
+                are given in [rad] and can range from [0, 2*pi). Can be either of type list or an object from
+                parameters.py module.
+            grey_levels (list of float): determines the mean luminance (pixel value) of the image. Can be either of type
+                list or an object from parameters.py module.
+            displacement (float): determines the displacement from the middle of the Gabor where the cropping line is
+                placed and rotated. Takes values from [-1, 1] where a negative value displaces to the left, a positive
+                value to the right.
+            rotation_angle (float): determines the rotation of the cropping line. The unit is radians.
+            eccentricities (list of float): object from parameters.py module, determining the ellipticity of the Gabor.
+                Takes values from [0, 1]. Default is 0 (circular Gabor). Can be either of type list or an object from
+                parameters.py module.
+            pixel_boundaries (list or None): Range of values the monitor can display [lower value, upper value]. Default
+                is [-1,1].
+            relative_sf (bool or None): Scale 'spatial_frequencies' by size (True) or use absolute units
+                (False, default).
+        """
+        # input dictionary (used for: 'find_optimal_stimulus_bruteforce' and '_parameter_converter')
+        self.arg_dict = locals().copy()
+        rn.seed(None)  # truely pseudo-random samples
+
+        # Treat all the 'non-stimulus-oriented' arguments
+        # canvas_size
+        if type(canvas_size) is list:
+            self.canvas_size = canvas_size
+        else:
+            raise TypeError('canvas_size must be of type list.')
+
+        # pixel_boundaries
+        if pixel_boundaries is None:
+            self.pixel_boundaries = [-1, 1]
+        elif type(pixel_boundaries) is list:
+            self.pixel_boundaries = pixel_boundaries
+        else:
+            raise TypeError('pixel_boundaries must be of type list.')
+
+        # relative_sf
+        if relative_sf is None:
+            self.relative_sf = False
+        elif type(relative_sf) is bool:
+            self.relative_sf = relative_sf
+        else:
+            raise TypeError('relative_sf must be of type bool.')
+
+        # Treat all the 'stimulus-oriented' arguments
+        # locations
+        if isinstance(locations, list):
+            self.locations = locations
+        elif isinstance(locations, FiniteSelection):
+            sample = locations.sample()
+            if isinstance(sample, list):
+                self.locations = sample
+            else:
+                raise TypeError("locations.sample() must be of type list.")
+        elif isinstance(locations, FiniteParameter):
+            if type(locations.values) is list:
+                if all(isinstance(loc, list) for loc in locations.values):
+                    self.locations = locations.values
+                else:
+                    raise TypeError('all list entries in locations.values have to be lists.')
+            else:
+                raise TypeError('locations.values has to be a list of lists.')
+        elif isinstance(locations, UniformRange):
+            sample = locations.sample()
+            if isinstance(sample, list):
+                self.locations = sample
+            else:
+                raise TypeError("locations.sample() must be of type list.")
+            if isinstance(locations.range, list):
+                self.locations_range = locations.range
+            else:
+                raise TypeError("locations.range must be of type list.")
+
+        # eccentricities
+        if eccentricities is None:
+            self.gammas = [1.0]  # default
+        elif isinstance(eccentricities, list):
+            self.gammas = [1 - e ** 2 for e in eccentricities]
+        else:
+            if isinstance(eccentricities, FiniteSelection):
+                sample = eccentricities.sample()
+                if isinstance(sample, list):
+                    self.gammas = [1 - e ** 2 for e in sample]
+                else:
+                    raise TypeError("eccentricities.sample() must be of type list.")
+            elif isinstance(eccentricities, FiniteParameter):
+                if type(eccentricities.values) is list:
+                    self.gammas = [1 - e ** 2 for e in eccentricities.values]
+                else:
+                    raise TypeError('eccentricities.values must be of type list.')
+            elif isinstance(eccentricities, UniformRange):
+                sample = eccentricities.sample()
+                if isinstance(sample, list):
+                    self.gammas = [1 - e ** 2 for e in sample]
+                else:
+                    raise TypeError("eccentricities.sample() must be of type list.")
+                if isinstance(eccentricities.range, list):
+                    self.gammas_range = [1 - e ** 2 for e in eccentricities.range[::-1]]
+                else:
+                    raise TypeError("eccentricities.range must be of type list.")
+
+        # read out the other inputs and store them as attributes
+        self._parameter_converter()
+
+        # For this class search methods, we want to get the parameters in an ax-friendly format
+        type_check = []
+        for arg in self.arg_dict:
+            if eccentricities is None:
+                if arg in ["self", "canvas_size", "pixel_boundaries", "relative_sf", "eccentricities"]:
+                    pass
+                else:
+                    type_check.append(isinstance(self.arg_dict[arg], (FiniteParameter, FiniteSelection, UniformRange)))
+            else:
+                if arg in ["self", "canvas_size", "pixel_boundaries", "relative_sf"]:
+                    pass
+                else:
+                    type_check.append(isinstance(self.arg_dict[arg], (FiniteParameter, FiniteSelection, UniformRange)))
+        if all(type_check):
+            self.auto_params = self._param_dict_for_search(locations=locations,
+                                                           sizes=sizes,
+                                                           spatial_frequencies1=spatial_frequencies1,
+                                                           spatial_frequencies2=spatial_frequencies2,
+                                                           contrasts1=contrasts1,
+                                                           contrasts2=contrasts2,
+                                                           orientations1=orientations1,
+                                                           orientations2=orientations2,
+                                                           phases1=phases1,
+                                                           phases2=phases2,
+                                                           gammas=eccentricities,
+                                                           grey_levels=grey_levels,
+                                                           displacement=displacement,
+                                                           rotation_angle=rotation_angle)
+
+    def params(self):
+        """ finite method, aranging the parameters in a list of tuples. """
+        return [
+            (self.locations, 'location'),
+            (self.sizes, 'size'),
+            (self.spatial_frequencies1, 'spatial_frequency1'),
+            (self.spatial_frequencies2, 'spatial_frequency2'),
+            (self.contrasts1, 'contrast1'),
+            (self.contrasts2, 'contrast2'),
+            (self.orientations1, 'orientation1'),
+            (self.orientations2, 'orientation2'),
+            (self.phases1, 'phase1'),
+            (self.phases2, 'phase2'),
+            (self.gammas, 'gamma'),
+            (self.grey_levels, 'grey_level'),
+            (self.displacement, 'displacement'),
+            (self.rotation_angle, 'rotation_angle')
+        ]
+
+    def params_from_idx(self, idx):
+        """ returns the parameter combination for a desired image index from an enumerable set of images. """
+        num_params = self.num_params()
+        c = np.unravel_index(idx, num_params)
+        params = [p[0][c[i]] for i, p in enumerate(self.params())]
+        # Caution changing the class methods: it is crucial that the index of params matches the correct parameter
+        if self.relative_sf:
+            params[2] /= params[1]  # params[2] is spatial_frequency and params[1] is size.
+        return params
+
+    def _parameter_converter(self):
+        """ Reads out the type of all the ordinary input arguments and converts them to attributes. """
+        for arg_key in self.arg_dict:
+            arg_value = self.arg_dict[arg_key]
+            if arg_key in ["canvas_size", "pixel_boundaries", "locations", "relative_sf", "eccentricities", "self"]:
+                pass  # exceptions
+            else:  # sizes, spatial_frequencies, contrasts, orientations, phases, grey_levels
+                if isinstance(arg_value, list):
+                    setattr(self, arg_key, arg_value)
+                elif isinstance(arg_value, FiniteSelection):
+                    sample = arg_value.sample()  # random sample of n values specified in sizes
+                    if isinstance(sample, list):
+                        setattr(self, arg_key, sample)
+                    else:
+                        raise TypeError("{}.sample() must be of type list.".format(arg_key))
+                elif isinstance(arg_value, FiniteParameter):
+                    if isinstance(arg_value.values, list):
+                        setattr(self, arg_key, arg_value.values)
+                    else:
+                        raise TypeError("{}.values must be of type list.".format(arg_key))
+                elif isinstance(arg_value, UniformRange):
+                    sample = arg_value.sample()
+                    if isinstance(sample, list):
+                        setattr(self, arg_key, sample)
+                    else:
+                        raise TypeError("{}.sample() must be of type list.".format(arg_key))
+                    if isinstance(arg_value.range, list):
+                        setattr(self, arg_key + "_range", arg_value.range)
+                    else:
+                        raise TypeError("{}.range must be of type list.".format(arg_key))
+
+    def stimulus(self, location, size, spatial_frequency1, spatial_frequency2, contrast1, contrast2, orientation1, 
+                 orientation2, phase1, phase2, gamma, grey_level, displacement, rotation_angle, **kwargs):
+        """
+        Args:
+            location (list of float): The center position of the Gabor.
+            size (float): The length of the longer axis of the ellipse of the Gabor envelope.
+            spatial_frequency (float): The inverse of the wavelength of the cosine factor.
+            contrast (float): Defines the amplitude of the stimulus in %. Takes values from 0 to 1.
+            orientation (float): The orientation of the normal to the parallel stripes.
+            phase (float): The phase offset of the cosine factor.
+            gamma (float): The spatial aspect ratio reflecting the ellipticity of the Gabor.
+            grey_level (float): The mean luminance.
+            displacement (float): The displacement of the cropping line.
+            rotation_angle (float): The rotation angle.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns: Image of the desired HiLo grating stimulus as numpy.ndarray.
+        """
+        # first half
+        # basic coordinates
+        x, y = np.meshgrid(np.arange(self.canvas_size[0]),
+                           np.arange(self.canvas_size[1]))        
+        coords = np.stack([x.flatten(), y.flatten()])
+
+        # coordinates for grating (location2)
+        coords_grating = coords - np.array(location)[:, None]
+
+        # define grating
+        R = np.array([[np.cos(orientation1), -np.sin(orientation1)],
+                             [np.sin(orientation1),  np.cos(orientation1)]])
+        x, y = R.dot(coords_grating).reshape((2, ) + x.shape)        
+
+        grating = np.cos(spatial_frequency1 * x * (2*np.pi) + phase1)
+        
+        # add contrast
+        amplitude = contrast1 * min(abs(self.pixel_boundaries[0] - grey_level),
+                                abs(self.pixel_boundaries[1] - grey_level))        
+        grating_contrast = amplitude * grating
+
+        # add mask for envelope    
+        norm_xy = np.sqrt(x ** 2 + y ** 2)
+        envelope = (norm_xy <= size/2)
+        
+        half1 = envelope * grating_contrast
+
+        # second half
+        # basic coordinates
+        x, y = np.meshgrid(np.arange(self.canvas_size[0]),
+                           np.arange(self.canvas_size[1]))        
+        coords = np.stack([x.flatten(), y.flatten()])
+
+        # coordinates for grating (location2)
+        coords_grating = coords - np.array(location)[:, None]
+
+        # define grating
+        R = np.array([[np.cos(orientation2), -np.sin(orientation2)],
+                             [np.sin(orientation2),  np.cos(orientation2)]])
+        x, y = R.dot(coords_grating).reshape((2, ) + x.shape)        
+
+        grating = np.cos(spatial_frequency2 * x * (2*np.pi) + phase2)
+        
+        # add contrast
+        amplitude = contrast2 * min(abs(self.pixel_boundaries[0] - grey_level),
+                                abs(self.pixel_boundaries[1] - grey_level))        
+        grating_contrast = amplitude * grating
+
+        # add mask for envelope    
+        norm_xy = np.sqrt(x ** 2 + y ** 2)
+        envelope = (norm_xy <= size/2)
+        
+        half2 = envelope * grating_contrast
+
+        # add cut
+        grid = np.array(np.meshgrid(np.arange(0,self.canvas_size[0]),np.arange(0,self.canvas_size[1])))
+
+        vector = [np.cos(rotation_angle),np.sin(rotation_angle)]
+        v_1 = np.array([vector[1], -vector[0]])
+        position = np.array(v_1*size/2*displacement+location)
+        
+        mask = (np.einsum('nm,mkl->nkl',v_1[None,:],grid-position[:,None,None])>0) & (envelope)        
+        half1[mask[0]] = half2[mask[0]]
+        
+        return half1
+
+    def _param_dict_for_search(self, locations, sizes, spatial_frequencies1, spatial_frequencies2, contrasts1, contrasts2, 
+                               orientations1, orientations2, phases1, phases2, gammas, grey_levels, displacement,                                                rotation_angle):
+        """
+        Create a dictionary of all Gabor parameters to an ax-friendly format.
+
+        Args:
+            locations: object from parameters.py module, defining the center of stimulus.
+            sizes: object from parameters.py module, defining the size of the Gaussian envelope.
+            spatial_frequencies: object from parameters.py module, defining the spatial frequency of grating.
+            contrasts: object from parameters.py module, defining the contrast of the image.
+            orientations: object from parameters.py module, defining the orientation of grating relative to envelope.
+            phases: object from parameters.py module, defining the phase offset of the grating.
+            gammas: object from parameters.py module, defining the spatial aspect ratio parameter of the envelope.
+            grey_levels: object from parameters.py module, defining the mean pixel intensity of the stimulus.
+            displacement (float): The displacement of the cropping line.
+            rotation_angle (float): The rotation rotation_angle.
+
+        Returns:
+            dict of dict: dictionary of all parameters and their respective attributes, i.e. 'name, 'type', 'bounds' and
+                'log_scale'.
+        """
+        rn.seed(None)  # truely random samples
+
+        arg_dict = locals().copy()
+        del arg_dict['self']
+
+        param_dict = {}
+        for arg_key in arg_dict:
+            # eccentricities/gammas should be a log_scale parameter, all others not.
+            if arg_key in ["gammas"]:
+                log_scale = True
+            else:
+                log_scale = False
+
+            # 1.) "finite case" -> 'type' = choice (more than one value) or 'type' = fixed (only one value)
+            if isinstance(arg_dict[arg_key], FiniteParameter) or isinstance(arg_dict[arg_key], FiniteSelection):
+
+                # define the type configuration based on the number of list elements
+                if type(getattr(self, arg_key)) is list:
+                    if len(getattr(self, arg_key)) > 1:
+                        name_type = "choice"
+                    else:
+                        name_type = "fixed"
+
+                if arg_key == 'locations':  # exception handling #1: locations
+                    if name_type == "choice":
+                        # width
+                        name_width = arg_key[:-1] + "_width"
+                        param_dict[name_width] = {"name": name_width,
+                                                  "type": name_type,
+                                                  "values": [float(loc[0]) for loc in getattr(self, arg_key)],
+                                                  "log_scale": log_scale}
+                        # height
+                        name_height = arg_key[:-1] + "_height"
+                        param_dict[name_height] = {"name": name_height,
+                                                   "type": name_type,
+                                                   "values": [float(loc[1]) for loc in getattr(self, arg_key)],
+                                                   "log_scale": log_scale}
+                    elif name_type == "fixed":
+                        # width
+                        name_width = arg_key[:-1] + "_width"
+                        param_dict[name_width] = {"name": name_width,
+                                                  "type": name_type,
+                                                  "value": [float(loc[0]) for loc in getattr(self, arg_key)][0]}
+                        # height
+                        name_height = arg_key[:-1] + "_height"
+                        param_dict[name_height] = {"name": name_height,
+                                                   "type": name_type,
+                                                   "value": [float(loc[1]) for loc in getattr(self, arg_key)][0]}
+                elif arg_key == 'spatial_frequencies1':  # exception handling #2: spatial_frequencies
+                    name = 'spatial_frequency1'
+                    if name_type == "choice":
+                        param_dict[name] = {"name": name,
+                                            "type": name_type,
+                                            "values": getattr(self, arg_key),
+                                            "log_scale": log_scale}
+                    elif name_type == "fixed":
+                        param_dict[name] = {"name": name,
+                                            "type": name_type,
+                                            "value": getattr(self, arg_key)[0]}
+                elif arg_key == 'spatial_frequencies2':  # exception handling #2: spatial_frequencies
+                    name = 'spatial_frequency2'
+                    if name_type == "choice":
+                        param_dict[name] = {"name": name,
+                                            "type": name_type,
+                                            "values": getattr(self, arg_key),
+                                            "log_scale": log_scale}
+                    elif name_type == "fixed":
+                        param_dict[name] = {"name": name,
+                                            "type": name_type,
+                                            "value": getattr(self, arg_key)[0]}
+                else:
+                    name = arg_key[:-1]
+                    if name_type == "choice":
+                        param_dict[name] = {"name": name,
+                                            "type": name_type,
+                                            "values": getattr(self, arg_key),
+                                            "log_scale": log_scale}
+                    elif name_type == "fixed":
+                        param_dict[name] = {"name": name,
+                                            "type": name_type,
+                                            "value": getattr(self, arg_key)[0]}
+
+            # 2.) "infinite case" -> 'type' = range
+            elif isinstance(arg_dict[arg_key], UniformRange):
+                if arg_key == 'locations':
+                    range_name = arg_key + '_range'
+                    # width
+                    name_width = arg_key[:-1] + "_width"
+                    param_dict[name_width] = {"name": name_width,
+                                              "type": "range",
+                                              "bounds": getattr(self, range_name)[0],
+                                              "log_scale": log_scale}
+                    # height
+                    name_height = arg_key[:-1] + "_height"
+                    param_dict[name_height] = {"name": name_height,
+                                               "type": "range",
+                                               "bounds": getattr(self, range_name)[1],
+                                               "log_scale": log_scale}
+                elif arg_key == 'spatial_frequencies1':
+                    name = 'spatial_frequency1'
+                    range_name = arg_key + "_range"
+                    param_dict[name] = {"name": name,
+                                        "type": "range",
+                                        "bounds": getattr(self, range_name),
+                                        "log_scale": log_scale}
+                elif arg_key == 'spatial_frequencies2':
+                    name = 'spatial_frequency2'
+                    range_name = arg_key + "_range"
+                    param_dict[name] = {"name": name,
+                                        "type": "range",
+                                        "bounds": getattr(self, range_name),
+                                        "log_scale": log_scale}
+                else:
+                    name = arg_key[:-1]
+                    range_name = arg_key + "_range"
+                    param_dict[name] = {"name": name,
+                                        "type": "range",
+                                        "bounds": getattr(self, range_name),
+                                        "log_scale": log_scale}
+
+            if gammas is None:
+                param_dict['gamma'] = {'name': 'gamma',
+                                       'type': 'fixed',
+                                       'value': 1.0}
+        return param_dict
+
+    def get_image_from_params(self, auto_params):
+        """
+        Generates the Gabor corresponding to the parameters given in auto_params.
+
+        Args:
+            auto_params (dict): A dictionary which has the parameter names as keys and their realization as values, i.e.
+                {'location_width': value1, 'location_height': value2, 'size': value3, 'spatial_frequency' : ...}
+
+        Returns:
+            numpy.array: Pixel intensities of the desired Gabor stimulus.
+
+        """
+        auto_params_copy = auto_params.copy()
+        auto_params_copy['location'] = [auto_params_copy['location_width'], auto_params_copy['location_height']]
+        del auto_params_copy['location_width'], auto_params_copy['location_height']
+        return self.stimulus(**auto_params_copy)
+
+    def train_evaluate(self, auto_params, model, data_key, unit_idx):
+        """
+        Evaluates the activation of a specific neuron in an evaluated (e.g. nnfabrik) model given the Gabor parameters.
+
+        Args:
+            auto_params (dict): A dictionary which has the parameter names as keys and their realization as values, i.e.
+                {'location_width': value1, 'location_height': value2, 'size': value3, 'spatial_frequency' : ...}
+            model (Encoder): evaluated model (e.g. nnfabrik) of interest.
+            data_key (str): session ID.
+            unit_idx (int): index of the desired model neuron.
+
+        Returns:
+            float: The activation of the Gabor image of the model neuron specified in unit_idx.
+        """
+        auto_params_copy = auto_params.copy()
+        image = self.get_image_from_params(auto_params_copy)
+        image_tensor = torch.tensor(image).expand(1, 1, self.canvas_size[1], self.canvas_size[0]).float()
+        activation = model(image_tensor, data_key=data_key).detach().numpy().squeeze()
+        return float(activation[unit_idx])
+
+    def find_optimal_stimulus(self, model, data_key, unit_idx, total_trials=30):
+        """
+        Runs Bayesian parameter optimization to find optimal Gabor (refer to https://ax.dev/docs/api.html).
+
+        Args:
+            model (Encoder): the underlying model of interest.
+            data_key (str): session ID of model.
+            unit_idx (int): unit index of desired neuron.
+            total_trials (int or None): number of optimization steps (default is 30 trials).
+
+        Returns
+            - list of dict: The list entries are dictionaries which store the optimal parameter combinations for the
+            corresponding unit. It has the variable name in the key and the optimal value in the values, i.e.
+            [{'location_width': value1, 'location_height': value2, 'size': value3, ...}, ...]
+            - list of tuple: The unit activations of the found optimal Gabor of the form [({'activation': mean_unit1},
+            {'activation': {'activation': sem_unit1}}), ...].
+        """
+        if not hasattr(self, "auto_params"):
+            raise TypeError("find_optimal_stimulus search method only supports input parameters from module "
+                            "parameters.py")
+
+        parameters = list(self.auto_params.values())
+
+        # define helper function as input to 'optimize'
+        def train_evaluate_helper(auto_params):
+            return partial(self.train_evaluate, model=model, data_key=data_key, unit_idx=unit_idx)(auto_params)
+
+       # run Bayesian search
+        best_params, values, _, _ = optimize(parameters=parameters.copy(),
+                                             evaluation_function=train_evaluate_helper,
+                                             objective_name='activation',
+                                             total_trials=total_trials)
+        return best_params, values
+
+    def find_optimal_stimulus_bruteforce(self, model, data_key, batch_size=100, return_activations=False, unit_idx=None,
+                                         plotflag=False):
+        """
+        Finds optimal parameter combination for all units based on brute force testing method.
+
+        Args:
+            model (Encoder): The evaluated model as an encoder class.
+            data_key (char): data key or session ID of model.
+            batch_size (int or optional): number of images per batch.
+            return_activations (bool or None): return maximal activation alongside its parameter combination
+            unit_idx (int or None): unit index of the desired model neuron. If not specified, return the best
+                parameters for all model neurons (advised, because search is done for all units anyway).
+            plotflag (bool or None): if True, plots the evolution of the maximal activation of the number of images
+                tested (default: False).
+
+        Returns
+            - params (list of dict): The optimal parameter settings for each of the different units
+            - max_activation (np.array of float): The maximal firing rate for each of the units over all images tested
+        """
+        if any([isinstance(par, UniformRange) for par in list(self.arg_dict.values())]):
+            raise TypeError('This method needs inputs of type FiniteParameter or FiniteSelection.')
+
+        n_images = np.prod(self.num_params())  # number of all parameter combinations
+        n_units = model.readout[data_key].outdims  # number of units
+
+        max_act_evo = np.zeros((n_images + 1, n_units))  # init storage of maximal activation evolution
+        activations = np.zeros(n_units)  # init activation array for all tested images
+        
+        model.cuda()
+
+        # divide set of images in batches before showing it to the model
+        for batch_idx, batch in enumerate(self.image_batches(batch_size)):
+
+            if batch.shape[0] != batch_size:
+                batch_size = batch.shape[0]
+                
+            # create images and compute activation for current batch
+            images_batch = batch.reshape((batch_size,) + tuple(self.canvas_size))
+            images_batch = np.expand_dims(images_batch, axis=1)
+            images_batch = torch.tensor(images_batch).float().cuda()
+            activations_batch = model(images_batch, data_key=data_key).cpu().detach().numpy().squeeze()
+
+            if plotflag:  # evolution of maximal activation
+                for unit in range(0, n_units):
+                    for idx, act in enumerate(activations_batch):
+                        i = (idx + 1) + batch_idx * batch_size
+                        max_act_evo[i, unit] = max(act[unit], max_act_evo[i - 1, unit])
+
+            # max and argmax for current batch
+            activations = np.vstack([activations, activations_batch])
+
+        # delete the first row (only zeros) by which we initialized
+        activations = np.delete(activations, 0, axis=0)
+
+        # get maximal activations for each unit
+        max_activations = np.amax(activations, axis=0)
+
+        # get the image index of the maximal activations
+        argmax_activations = np.argmax(activations, axis=0)
+
+        params = [None] * n_units  # init list with parameter dictionaries
+        for unit, opt_param_idx in enumerate(argmax_activations):
+            params[unit] = self.params_dict_from_idx(opt_param_idx)
+
+        # plot the evolution of the maximal activation for each additional image
+        if plotflag:
+            fig, ax = plt.subplots()
+            for unit in range(0, n_units):
+                ax.plot(np.arange(0, n_images + 1), max_act_evo[:, unit])
+            plt.xlabel('Number of Images')
+            plt.ylabel('Maximal Activation')
+
+        # catch return options
+        if unit_idx is not None:
+            if return_activations:
+                return params[unit_idx], activations[unit_idx], max_activations[unit_idx]
+            else:
+                return params[unit_idx], activations[unit_idx]
+        else:
+            if return_activations:
+                return params, activations, max_activations
+            else:
+                return params, activations
+            
+            
+class GratingSet(StimuliSet):
+    """
+    A class to generate Grating stimuli as sinusoidal gratings.
+    """
+    def __init__(self, canvas_size, locations, sizes, spatial_frequencies, contrasts, orientations, phases, grey_levels,
+                 eccentricities=None, pixel_boundaries=None, relative_sf=None):
+        """
+        Args:
+            canvas_size (list of int): The canvas size [width, height].
+            locations (list of list): specifies the center position of the Grating. Can be either of type list or an
+                object from parameters.py module. This module has 3 relevant classes: FiniteParameter, FiniteSelection,
+                and UniformRange. FiniteParameter objects will be treated exactely like lists. FiniteSelection objects
+                will generate n samples from the given list of values from a probability mass function. UniformRange
+                objects will sample from a continuous distribution within the defined parameter ranges. If location is
+                of type UniformRange, there cannot be an additional argument for the cumulative density distribution.
+            sizes (list of float): determines the size of the Grating envelope in direction of the longer axis of the
+                ellipse. It is measured in pixels (pixel radius). The size corresponds to 2*SD of the Gaussian envelope
+                (+/- SD of envelope). Can be either of type list or an object from parameters.py module.
+            spatial_frequencies (list of float): the inverse of the wavelength of the cosine factor entered in
+                [cycles / pixel]. Can be either of type list or an object from parameters.py module. By setting the
+                parameter 'relative_sf'=True, the spatial frequency depends on size, namely [cycles / envelope]. In
+                this case, the value for the spatial frequency reflects how many periods fit into the length of 'size'
+                from the center. In order to prevent the occurrence of undesired effects at the image borders, the
+                wavelength value should be smaller than one fifth of the input image size. Also, the Nyquist-frequency
+                should not be exceeded to avoid undesired sampling artifacts.
+            contrasts (list of float): defines the amplitude of the stimulus in %. Takes values from 0 to 1. E.g., for a
+                grey_level=-0.2 and pixel_boundaries=[-1,1], a contrast of 1 (=100%) means the amplitude of the Grating
+                stimulus is 0.8. Can be either of type list or an object from parameters.py module.
+            orientations (list of float): determines the orientation of the normal to the parallel stripes of a Grating
+                function. Its values are given in [rad] and can range from [0, pi). Can be either of type list or an
+                object from parameters.py module.
+            phases (list of float): determines the phase offset in the cosine factor of the Grating function. Its values
+                are given in [rad] and can range from [0, 2*pi). Can be either of type list or an object from
+                parameters.py module.
+            grey_levels (list of float): determines the mean luminance (pixel value) of the image. Can be either of type
+                list or an object from parameters.py module.
+            eccentricities (list of float): object from parameters.py module, determining the ellipticity of the Grating.
+                Takes values from [0, 1]. Default is 0 (circular Grating). Can be either of type list or an object from
+                parameters.py module.
+            pixel_boundaries (list or None): Range of values the monitor can display [lower value, upper value]. Default
+                is [-1,1].
+            relative_sf (bool or None): Scale 'spatial_frequencies' by size (True) or use absolute units
+                (False, default).
+        """
+        # input dictionary (used for: 'find_optimal_stimulus_bruteforce' and '_parameter_converter')
+        self.arg_dict = locals().copy()
+        rn.seed(None)  # truely pseudo-random samples
+
+        # Treat all the 'non-stimulus-oriented' arguments
+        # canvas_size
+        if type(canvas_size) is list:
+            self.canvas_size = canvas_size
+        else:
+            raise TypeError('canvas_size must be of type list.')
+
+        # pixel_boundaries
+        if pixel_boundaries is None:
+            self.pixel_boundaries = [-1, 1]
+        elif type(pixel_boundaries) is list:
+            self.pixel_boundaries = pixel_boundaries
+        else:
+            raise TypeError('pixel_boundaries must be of type list.')
+
+        # relative_sf
+        if relative_sf is None:
+            self.relative_sf = False
+        elif type(relative_sf) is bool:
+            self.relative_sf = relative_sf
+        else:
+            raise TypeError('relative_sf must be of type bool.')
+
+        # Treat all the 'stimulus-oriented' arguments
+        # locations
+        if isinstance(locations, list):
+            self.locations = locations
+        elif isinstance(locations, FiniteSelection):
+            sample = locations.sample()
+            if isinstance(sample, list):
+                self.locations = sample
+            else:
+                raise TypeError("locations.sample() must be of type list.")
+        elif isinstance(locations, FiniteParameter):
+            if type(locations.values) is list:
+                if all(isinstance(loc, list) for loc in locations.values):
+                    self.locations = locations.values
+                else:
+                    raise TypeError('all list entries in locations.values have to be lists.')
+            else:
+                raise TypeError('locations.values has to be a list of lists.')
+        elif isinstance(locations, UniformRange):
+            sample = locations.sample()
+            if isinstance(sample, list):
+                self.locations = sample
+            else:
+                raise TypeError("locations.sample() must be of type list.")
+            if isinstance(locations.range, list):
+                self.locations_range = locations.range
+            else:
+                raise TypeError("locations.range must be of type list.")
+
+        # eccentricities
+        if eccentricities is None:
+            self.gammas = [1.0]  # default
+        elif isinstance(eccentricities, list):
+            self.gammas = [1 - e ** 2 for e in eccentricities]
+        else:
+            if isinstance(eccentricities, FiniteSelection):
+                sample = eccentricities.sample()
+                if isinstance(sample, list):
+                    self.gammas = [1 - e ** 2 for e in sample]
+                else:
+                    raise TypeError("eccentricities.sample() must be of type list.")
+            elif isinstance(eccentricities, FiniteParameter):
+                if type(eccentricities.values) is list:
+                    self.gammas = [1 - e ** 2 for e in eccentricities.values]
+                else:
+                    raise TypeError('eccentricities.values must be of type list.')
+            elif isinstance(eccentricities, UniformRange):
+                sample = eccentricities.sample()
+                if isinstance(sample, list):
+                    self.gammas = [1 - e ** 2 for e in sample]
+                else:
+                    raise TypeError("eccentricities.sample() must be of type list.")
+                if isinstance(eccentricities.range, list):
+                    self.gammas_range = [1 - e ** 2 for e in eccentricities.range[::-1]]
+                else:
+                    raise TypeError("eccentricities.range must be of type list.")
+
+        # read out the other inputs and store them as attributes
+        self._parameter_converter()
+
+        # For this class search methods, we want to get the parameters in an ax-friendly format
+        type_check = []
+        for arg in self.arg_dict:
+            if eccentricities is None:
+                if arg in ["self", "canvas_size", "pixel_boundaries", "relative_sf", "eccentricities"]:
+                    pass
+                else:
+                    type_check.append(isinstance(self.arg_dict[arg], (FiniteParameter, FiniteSelection, UniformRange)))
+            else:
+                if arg in ["self", "canvas_size", "pixel_boundaries", "relative_sf"]:
+                    pass
+                else:
+                    type_check.append(isinstance(self.arg_dict[arg], (FiniteParameter, FiniteSelection, UniformRange)))
+        if all(type_check):
+            self.auto_params = self._param_dict_for_search(locations=locations,
+                                                           sizes=sizes,
+                                                           spatial_frequencies=spatial_frequencies,
+                                                           contrasts=contrasts,
+                                                           orientations=orientations,
+                                                           phases=phases,
+                                                           gammas=eccentricities,
+                                                           grey_levels=grey_levels)
+
+    def params(self):
+        """ finite method, aranging the parameters in a list of tuples. """
+        return [
+            (self.locations, 'location'),
+            (self.sizes, 'size'),
+            (self.spatial_frequencies, 'spatial_frequency'),
+            (self.contrasts, 'contrast'),
+            (self.orientations, 'orientation'),
+            (self.phases, 'phase'),
+            (self.gammas, 'gamma'),
+            (self.grey_levels, 'grey_level')
+        ]
+
+    def params_from_idx(self, idx):
+        """ returns the parameter combination for a desired image index from an enumerable set of images. """
+        num_params = self.num_params()
+        c = np.unravel_index(idx, num_params)
+        params = [p[0][c[i]] for i, p in enumerate(self.params())]
+        # Caution changing the class methods: it is crucial that the index of params matches the correct parameter
+        if self.relative_sf:
+            params[2] /= params[1]  # params[2] is spatial_frequency and params[1] is size.
+        return params
+
+    def _parameter_converter(self):
+        """ Reads out the type of all the ordinary input arguments and converts them to attributes. """
+        for arg_key in self.arg_dict:
+            arg_value = self.arg_dict[arg_key]
+            if arg_key in ["canvas_size", "pixel_boundaries", "locations", "relative_sf", "eccentricities", "self"]:
+                pass  # exceptions
+            else:  # sizes, spatial_frequencies, contrasts, orientations, phases, grey_levels
+                if isinstance(arg_value, list):
+                    setattr(self, arg_key, arg_value)
+                elif isinstance(arg_value, FiniteSelection):
+                    sample = arg_value.sample()  # random sample of n values specified in sizes
+                    if isinstance(sample, list):
+                        setattr(self, arg_key, sample)
+                    else:
+                        raise TypeError("{}.sample() must be of type list.".format(arg_key))
+                elif isinstance(arg_value, FiniteParameter):
+                    if isinstance(arg_value.values, list):
+                        setattr(self, arg_key, arg_value.values)
+                    else:
+                        raise TypeError("{}.values must be of type list.".format(arg_key))
+                elif isinstance(arg_value, UniformRange):
+                    sample = arg_value.sample()
+                    if isinstance(sample, list):
+                        setattr(self, arg_key, sample)
+                    else:
+                        raise TypeError("{}.sample() must be of type list.".format(arg_key))
+                    if isinstance(arg_value.range, list):
+                        setattr(self, arg_key + "_range", arg_value.range)
+                    else:
+                        raise TypeError("{}.range must be of type list.".format(arg_key))
+
+    def stimulus(self, location, size, spatial_frequency, contrast, orientation, phase, gamma, grey_level, **kwargs):
+        """
+        Args:
+            location (list of float): The center position of the Grating.
+            size (float): The length of the longer axis of the ellipse of the Grating envelope.
+            spatial_frequency (float): The inverse of the wavelength of the cosine factor.
+            contrast (float): Defines the amplitude of the stimulus in %. Takes values from 0 to 1.
+            orientation (float): The orientation of the normal to the parallel stripes.
+            phase (float): The phase offset of the cosine factor.
+            gamma (float): The spatial aspect ratio reflecting the ellipticity of the Grating.
+            grey_level (float): The mean luminance.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns: Pixel intensities of the desired Grating stimulus as numpy.ndarray.
+        """
+
+        x, y = np.meshgrid(np.arange(self.canvas_size[0]) - location[0],
+                           np.arange(self.canvas_size[1]) - location[1])
+        
+        coords = np.stack([x.flatten(), y.flatten()])
+
+        R = np.array([[np.cos(orientation), -np.sin(orientation)],
+                             [np.sin(orientation),  np.cos(orientation)]])
+
+        x, y = R.dot(coords).reshape((2, ) + x.shape)
+
+        norm_xy = np.sqrt(x ** 2 + y ** 2)
+
+        envelope = (norm_xy <= size/2)
+
+        grating = np.cos(spatial_frequency * x * (2*np.pi) + phase)
+        
+        # add contrast
+        amplitude = contrast * min(abs(self.pixel_boundaries[0] - grey_level),
+                                abs(self.pixel_boundaries[1] - grey_level))
+        
+        grating_contrast = amplitude * grating
+        
+        return envelope * grating_contrast
+
+    def _param_dict_for_search(self, locations, sizes, spatial_frequencies, contrasts, orientations, phases, gammas,
+                               grey_levels):
+        """
+        Create a dictionary of all Grating parameters to an ax-friendly format.
+
+        Args:
+            locations: object from parameters.py module, defining the center of stimulus.
+            sizes: object from parameters.py module, defining the size of the Gaussian envelope.
+            spatial_frequencies: object from parameters.py module, defining the spatial frequency of grating.
+            contrasts: object from parameters.py module, defining the contrast of the image.
+            orientations: object from parameters.py module, defining the orientation of grating relative to envelope.
+            phases: object from parameters.py module, defining the phase offset of the grating.
+            gammas: object from parameters.py module, defining the spatial aspect ratio parameter of the envelope.
+            grey_levels: object from parameters.py module, defining the mean pixel intensity of the stimulus.
+
+        Returns:
+            dict of dict: dictionary of all parameters and their respective attributes, i.e. 'name, 'type', 'bounds' and
+                'log_scale'.
+        """
+        rn.seed(None)  # truely random samples
+
+        arg_dict = locals().copy()
+        del arg_dict['self']
+
+        param_dict = {}
+        for arg_key in arg_dict:
+            # eccentricities/gammas should be a log_scale parameter, all others not.
+            if arg_key in ["gammas"]:
+                log_scale = True
+            else:
+                log_scale = False
+
+            # 1.) "finite case" -> 'type' = choice (more than one value) or 'type' = fixed (only one value)
+            if isinstance(arg_dict[arg_key], FiniteParameter) or isinstance(arg_dict[arg_key], FiniteSelection):
+
+                # define the type configuration based on the number of list elements
+                if type(getattr(self, arg_key)) is list:
+                    if len(getattr(self, arg_key)) > 1:
+                        name_type = "choice"
+                    else:
+                        name_type = "fixed"
+
+                if arg_key == 'locations':  # exception handling #1: locations
+                    if name_type == "choice":
+                        # width
+                        name_width = arg_key[:-1] + "_width"
+                        param_dict[name_width] = {"name": name_width,
+                                                  "type": name_type,
+                                                  "values": [float(loc[0]) for loc in getattr(self, arg_key)],
+                                                  "log_scale": log_scale}
+                        # height
+                        name_height = arg_key[:-1] + "_height"
+                        param_dict[name_height] = {"name": name_height,
+                                                   "type": name_type,
+                                                   "values": [float(loc[1]) for loc in getattr(self, arg_key)],
+                                                   "log_scale": log_scale}
+                    elif name_type == "fixed":
+                        # width
+                        name_width = arg_key[:-1] + "_width"
+                        param_dict[name_width] = {"name": name_width,
+                                                  "type": name_type,
+                                                  "value": [float(loc[0]) for loc in getattr(self, arg_key)][0]}
+                        # height
+                        name_height = arg_key[:-1] + "_height"
+                        param_dict[name_height] = {"name": name_height,
+                                                   "type": name_type,
+                                                   "value": [float(loc[1]) for loc in getattr(self, arg_key)][0]}
+                elif arg_key == 'spatial_frequencies':  # exception handling #2: spatial_frequencies
+                    name = 'spatial_frequency'
+                    if name_type == "choice":
+                        param_dict[name] = {"name": name,
+                                            "type": name_type,
+                                            "values": getattr(self, arg_key),
+                                            "log_scale": log_scale}
+                    elif name_type == "fixed":
+                        param_dict[name] = {"name": name,
+                                            "type": name_type,
+                                            "value": getattr(self, arg_key)[0]}
+                else:
+                    name = arg_key[:-1]
+                    if name_type == "choice":
+                        param_dict[name] = {"name": name,
+                                            "type": name_type,
+                                            "values": getattr(self, arg_key),
+                                            "log_scale": log_scale}
+                    elif name_type == "fixed":
+                        param_dict[name] = {"name": name,
+                                            "type": name_type,
+                                            "value": getattr(self, arg_key)[0]}
+
+            # 2.) "infinite case" -> 'type' = range
+            elif isinstance(arg_dict[arg_key], UniformRange):
+                if arg_key == 'locations':
+                    range_name = arg_key + '_range'
+                    # width
+                    name_width = arg_key[:-1] + "_width"
+                    param_dict[name_width] = {"name": name_width,
+                                              "type": "range",
+                                              "bounds": getattr(self, range_name)[0],
+                                              "log_scale": log_scale}
+                    # height
+                    name_height = arg_key[:-1] + "_height"
+                    param_dict[name_height] = {"name": name_height,
+                                               "type": "range",
+                                               "bounds": getattr(self, range_name)[1],
+                                               "log_scale": log_scale}
+                elif arg_key == 'spatial_frequencies':
+                    name = 'spatial_frequency'
+                    range_name = arg_key + "_range"
+                    param_dict[name] = {"name": name,
+                                        "type": "range",
+                                        "bounds": getattr(self, range_name),
+                                        "log_scale": log_scale}
+                else:
+                    name = arg_key[:-1]
+                    range_name = arg_key + "_range"
+                    param_dict[name] = {"name": name,
+                                        "type": "range",
+                                        "bounds": getattr(self, range_name),
+                                        "log_scale": log_scale}
+
+            if gammas is None:
+                param_dict['gamma'] = {'name': 'gamma',
+                                       'type': 'fixed',
+                                       'value': 1.0}
+        return param_dict
+
+    def get_image_from_params(self, auto_params):
+        """
+        Generates the Grating corresponding to the parameters given in auto_params.
+
+        Args:
+            auto_params (dict): A dictionary which has the parameter names as keys and their realization as values, i.e.
+                {'location_width': value1, 'location_height': value2, 'size': value3, 'spatial_frequency' : ...}
+
+        Returns:
+            numpy.array: Pixel intensities of the desired Grating stimulus.
+
+        """
+        auto_params_copy = auto_params.copy()
+        auto_params_copy['location'] = [auto_params_copy['location_width'], auto_params_copy['location_height']]
+        del auto_params_copy['location_width'], auto_params_copy['location_height']
+        return self.stimulus(**auto_params_copy)
+
+    def train_evaluate(self, auto_params, model, data_key, unit_idx):
+        """
+        Evaluates the activation of a specific neuron in an evaluated (e.g. nnfabrik) model given the Grating parameters.
+
+        Args:
+            auto_params (dict): A dictionary which has the parameter names as keys and their realization as values, i.e.
+                {'location_width': value1, 'location_height': value2, 'size': value3, 'spatial_frequency' : ...}
+            model (Encoder): evaluated model (e.g. nnfabrik) of interest.
+            data_key (str): session ID.
+            unit_idx (int): index of the desired model neuron.
+
+        Returns:
+            float: The activation of the Grating image of the model neuron specified in unit_idx.
+        """
+        auto_params_copy = auto_params.copy()
+        image = self.get_image_from_params(auto_params_copy)
+        image_tensor = torch.tensor(image).expand(1, 1, self.canvas_size[1], self.canvas_size[0]).float()
+        activation = model(image_tensor, data_key=data_key).detach().numpy().squeeze()
+        return float(activation[unit_idx])
+
+    def find_optimal_stimulus(self, model, data_key, unit_idx, total_trials=30):
+        """
+        Runs Bayesian parameter optimization to find optimal Grating (refer to https://ax.dev/docs/api.html).
+
+        Args:
+            model (Encoder): the underlying model of interest.
+            data_key (str): session ID of model.
+            unit_idx (int): unit index of desired neuron.
+            total_trials (int or None): number of optimization steps (default is 30 trials).
+
+        Returns
+            - list of dict: The list entries are dictionaries which store the optimal parameter combinations for the
+            corresponding unit. It has the variable name in the key and the optimal value in the values, i.e.
+            [{'location_width': value1, 'location_height': value2, 'size': value3, ...}, ...]
+            - list of tuple: The unit activations of the found optimal Grating of the form [({'activation': mean_unit1},
+            {'activation': {'activation': sem_unit1}}), ...].
+        """
+        if not hasattr(self, "auto_params"):
+            raise TypeError("find_optimal_stimulus search method only supports input parameters from module "
+                            "parameters.py")
+
+        parameters = list(self.auto_params.values())
+
+        # define helper function as input to 'optimize'
+        def train_evaluate_helper(auto_params):
+            return partial(self.train_evaluate, model=model, data_key=data_key, unit_idx=unit_idx)(auto_params)
+
+       # run Bayesian search
+        best_params, values, _, _ = optimize(parameters=parameters.copy(),
+                                             evaluation_function=train_evaluate_helper,
+                                             objective_name='activation',
+                                             total_trials=total_trials)
+        return best_params, values
+
+    def find_optimal_stimulus_bruteforce(self, model, data_key, batch_size=100, return_activations=False, unit_idx=None,
+                                         plotflag=False):
+        """
+        Finds optimal parameter combination for all units based on brute force testing method.
+
+        Args:
+            model (Encoder): The evaluated model as an encoder class.
+            data_key (char): data key or session ID of model.
+            batch_size (int or optional): number of images per batch.
+            return_activations (bool or None): return maximal activation alongside its parameter combination
+            unit_idx (int or None): unit index of the desired model neuron. If not specified, return the best
+                parameters for all model neurons (advised, because search is done for all units anyway).
+            plotflag (bool or None): if True, plots the evolution of the maximal activation of the number of images
+                tested (default: False).
+
+        Returns
+            - params (list of dict): The optimal parameter settings for each of the different units
+            - max_activation (np.array of float): The maximal firing rate for each of the units over all images tested
+        """
+        if any([isinstance(par, UniformRange) for par in list(self.arg_dict.values())]):
+            raise TypeError('This method needs inputs of type FiniteParameter or FiniteSelection.')
+
+        n_images = np.prod(self.num_params())  # number of all parameter combinations
+        n_units = model.readout[data_key].outdims  # number of units
+
+        max_act_evo = np.zeros((n_images + 1, n_units))  # init storage of maximal activation evolution
+        activations = np.zeros(n_units)  # init activation array for all tested images
+        
+        model.cuda()
+
+        # divide set of images in batches before showing it to the model
+        for batch_idx, batch in enumerate(self.image_batches(batch_size)):
+
+            if batch.shape[0] != batch_size:
+                batch_size = batch.shape[0]
+                
+            # create images and compute activation for current batch
+            images_batch = batch.reshape((batch_size,) + tuple(self.canvas_size))
+            images_batch = np.expand_dims(images_batch, axis=1)
+            images_batch = torch.tensor(images_batch).float().cuda()
+            activations_batch = model(images_batch, data_key=data_key).cpu().detach().numpy().squeeze()
+
+            if plotflag:  # evolution of maximal activation
+                for unit in range(0, n_units):
+                    for idx, act in enumerate(activations_batch):
+                        i = (idx + 1) + batch_idx * batch_size
+                        max_act_evo[i, unit] = max(act[unit], max_act_evo[i - 1, unit])
+
+            # max and argmax for current batch
+            activations = np.vstack([activations, activations_batch])
+
+        # delete the first row (only zeros) by which we initialized
+        activations = np.delete(activations, 0, axis=0)
+
+        # get maximal activations for each unit
+        max_activations = np.amax(activations, axis=0)
+
+        # get the image index of the maximal activations
+        argmax_activations = np.argmax(activations, axis=0)
+
+        params = [None] * n_units  # init list with parameter dictionaries
+        for unit, opt_param_idx in enumerate(argmax_activations):
+            params[unit] = self.params_dict_from_idx(opt_param_idx)
+
+        # plot the evolution of the maximal activation for each additional image
+        if plotflag:
+            fig, ax = plt.subplots()
+            for unit in range(0, n_units):
+                ax.plot(np.arange(0, n_images + 1), max_act_evo[:, unit])
+            plt.xlabel('Number of Images')
+            plt.ylabel('Maximal Activation')
+
+        # catch return options
+        if unit_idx is not None:
+            if return_activations:
+                return params[unit_idx], activations[unit_idx], max_activations[unit_idx]
+            else:
+                return params[unit_idx], activations[unit_idx]
+        else:
+            if return_activations:
+                return params, activations, max_activations
+            else:
+                return params, activations
+
+            
+            
+class ShiftedGratingSet(StimuliSet):
+    """
+    A class to generate shifted Grating stimuli as sinusoidal gratings.
+    """
+    def __init__(self, canvas_size, locations_gabor, locations_grating, sizes, spatial_frequencies, contrasts, orientations,                      phases, grey_levels, eccentricities=None, pixel_boundaries=None, relative_sf=None):
+        """
+        Args:
+            canvas_size (list of int): The canvas size [width, height].
+            locations_gabor (list of list): specifies the center position of the Gabor. Can be either of type list or an
+                object from parameters.py module. This module has 3 relevant classes: FiniteParameter, FiniteSelection,
+                and UniformRange. FiniteParameter objects will be treated exactely like lists. FiniteSelection objects
+                will generate n samples from the given list of values from a probability mass function. UniformRange
+                objects will sample from a continuous distribution within the defined parameter ranges. If location is
+                of type UniformRange, there cannot be an additional argument for the cumulative density distribution.
+            locations_grating (list of list): specifies the center position of the Grating. Can be either of type list or an
+                object from parameters.py module. The position of the mask for the Grating is shifted to the other side of
+                the Gabor location.
+            sizes (list of float): determines the size of the Grating envelope in direction of the longer axis of the
+                ellipse. It is measured in pixels (pixel radius). The size corresponds to 2*SD of the Gaussian envelope
+                (+/- SD of envelope). Can be either of type list or an object from parameters.py module.
+            spatial_frequencies (list of float): the inverse of the wavelength of the cosine factor entered in
+                [cycles / pixel]. Can be either of type list or an object from parameters.py module. By setting the
+                parameter 'relative_sf'=True, the spatial frequency depends on size, namely [cycles / envelope]. In
+                this case, the value for the spatial frequency reflects how many periods fit into the length of 'size'
+                from the center. In order to prevent the occurrence of undesired effects at the image borders, the
+                wavelength value should be smaller than one fifth of the input image size. Also, the Nyquist-frequency
+                should not be exceeded to avoid undesired sampling artifacts.
+            contrasts (list of float): defines the amplitude of the stimulus in %. Takes values from 0 to 1. E.g., for a
+                grey_level=-0.2 and pixel_boundaries=[-1,1], a contrast of 1 (=100%) means the amplitude of the Grating
+                stimulus is 0.8. Can be either of type list or an object from parameters.py module.
+            orientations (list of float): determines the orientation of the normal to the parallel stripes of a Grating
+                function. Its values are given in [rad] and can range from [0, pi). Can be either of type list or an
+                object from parameters.py module.
+            phases (list of float): determines the phase offset in the cosine factor of the Grating function. Its values
+                are given in [rad] and can range from [0, 2*pi). Can be either of type list or an object from
+                parameters.py module.
+            grey_levels (list of float): determines the mean luminance (pixel value) of the image. Can be either of type
+                list or an object from parameters.py module.
+            eccentricities (list of float): object from parameters.py module, determining the ellipticity of the Grating.
+                Takes values from [0, 1]. Default is 0 (circular Grating). Can be either of type list or an object from
+                parameters.py module.
+            pixel_boundaries (list or None): Range of values the monitor can display [lower value, upper value]. Default
+                is [-1,1].
+            relative_sf (bool or None): Scale 'spatial_frequencies' by size (True) or use absolute units
+                (False, default).
+        """
+        # input dictionary (used for: 'find_optimal_stimulus_bruteforce' and '_parameter_converter')
+        self.arg_dict = locals().copy()
+        rn.seed(None)  # truely pseudo-random samples
+
+        # Treat all the 'non-stimulus-oriented' arguments
+        # canvas_size
+        if type(canvas_size) is list:
+            self.canvas_size = canvas_size
+        else:
+            raise TypeError('canvas_size must be of type list.')
+
+        # pixel_boundaries
+        if pixel_boundaries is None:
+            self.pixel_boundaries = [-1, 1]
+        elif type(pixel_boundaries) is list:
+            self.pixel_boundaries = pixel_boundaries
+        else:
+            raise TypeError('pixel_boundaries must be of type list.')
+
+        # relative_sf
+        if relative_sf is None:
+            self.relative_sf = False
+        elif type(relative_sf) is bool:
+            self.relative_sf = relative_sf
+        else:
+            raise TypeError('relative_sf must be of type bool.')
+
+        # Treat all the 'stimulus-oriented' arguments
+        # locations
+        if isinstance(locations_gabor, list):
+            self.locations_gabor = locations_gabor
+        elif isinstance(locations_gabor, FiniteSelection):
+            sample = locations_gabor.sample()
+            if isinstance(sample, list):
+                self.locations_gabor = sample
+            else:
+                raise TypeError("locations_gabor.sample() must be of type list.")
+        elif isinstance(locations_gabor, FiniteParameter):
+            if type(locations_gabor.values) is list:
+                if all(isinstance(loc, list) for loc in locations_gabor.values):
+                    self.locations_gabor = locations_gabor.values
+                else:
+                    raise TypeError('all list entries in locations.values have to be lists.')
+            else:
+                raise TypeError('locations_gabor.values has to be a list of lists.')
+        elif isinstance(locations_gabor, UniformRange):
+            sample = locations_gabor.sample()
+            if isinstance(sample, list):
+                self.locations_gabor = sample
+            else:
+                raise TypeError("locations_gabor.sample() must be of type list.")
+            if isinstance(locations_gabor.range, list):
+                self.locations_gabor_range = locations_gabor.range
+            else:
+                raise TypeError("locations_gabor.range must be of type list.")
+                
+        if isinstance(locations_grating, list):
+            self.locations_grating = locations_grating
+        elif isinstance(locations_grating, FiniteSelection):
+            sample = locations_grating.sample()
+            if isinstance(sample, list):
+                self.locations_grating = sample
+            else:
+                raise TypeError("locations_grating.sample() must be of type list.")
+        elif isinstance(locations_grating, FiniteParameter):
+            if type(locations_grating.values) is list:
+                if all(isinstance(loc, list) for loc in locations_grating.values):
+                    self.locations_grating = locations_grating.values
+                else:
+                    raise TypeError('all list entries in locations.values have to be lists.')
+            else:
+                raise TypeError('locations_grating.values has to be a list of lists.')
+        elif isinstance(locations_grating, UniformRange):
+            sample = locations_grating.sample()
+            if isinstance(sample, list):
+                self.locations_grating = sample
+            else:
+                raise TypeError("locations_grating.sample() must be of type list.")
+            if isinstance(locations_grating.range, list):
+                self.locations_grating_range = locations_grating.range
+            else:
+                raise TypeError("locations_grating.range must be of type list.")
+
+        # eccentricities
+        if eccentricities is None:
+            self.gammas = [1.0]  # default
+        elif isinstance(eccentricities, list):
+            self.gammas = [1 - e ** 2 for e in eccentricities]
+        else:
+            if isinstance(eccentricities, FiniteSelection):
+                sample = eccentricities.sample()
+                if isinstance(sample, list):
+                    self.gammas = [1 - e ** 2 for e in sample]
+                else:
+                    raise TypeError("eccentricities.sample() must be of type list.")
+            elif isinstance(eccentricities, FiniteParameter):
+                if type(eccentricities.values) is list:
+                    self.gammas = [1 - e ** 2 for e in eccentricities.values]
+                else:
+                    raise TypeError('eccentricities.values must be of type list.')
+            elif isinstance(eccentricities, UniformRange):
+                sample = eccentricities.sample()
+                if isinstance(sample, list):
+                    self.gammas = [1 - e ** 2 for e in sample]
+                else:
+                    raise TypeError("eccentricities.sample() must be of type list.")
+                if isinstance(eccentricities.range, list):
+                    self.gammas_range = [1 - e ** 2 for e in eccentricities.range[::-1]]
+                else:
+                    raise TypeError("eccentricities.range must be of type list.")
+
+        # read out the other inputs and store them as attributes
+        self._parameter_converter()
+
+        # For this class search methods, we want to get the parameters in an ax-friendly format
+        type_check = []
+        for arg in self.arg_dict:
+            if eccentricities is None:
+                if arg in ["self", "canvas_size", "pixel_boundaries", "relative_sf", "eccentricities"]:
+                    pass
+                else:
+                    type_check.append(isinstance(self.arg_dict[arg], (FiniteParameter, FiniteSelection, UniformRange)))
+            else:
+                if arg in ["self", "canvas_size", "pixel_boundaries", "relative_sf"]:
+                    pass
+                else:
+                    type_check.append(isinstance(self.arg_dict[arg], (FiniteParameter, FiniteSelection, UniformRange)))
+        if all(type_check):
+            self.auto_params = self._param_dict_for_search(locations_gabor=locations_gabor,
+                                                           locations_grating=locations_grating,
+                                                           sizes=sizes,
+                                                           spatial_frequencies=spatial_frequencies,
+                                                           contrasts=contrasts,
+                                                           orientations=orientations,
+                                                           phases=phases,
+                                                           gammas=eccentricities,
+                                                           grey_levels=grey_levels)
+
+    def params(self):
+        """ finite method, aranging the parameters in a list of tuples. """
+        return [
+            (self.locations_gabor, 'location_gabor'),
+            (self.locations_grating, 'location_grating'),
+            (self.sizes, 'size'),
+            (self.spatial_frequencies, 'spatial_frequency'),
+            (self.contrasts, 'contrast'),
+            (self.orientations, 'orientation'),
+            (self.phases, 'phase'),
+            (self.gammas, 'gamma'),
+            (self.grey_levels, 'grey_level')
+        ]
+
+    def params_from_idx(self, idx):
+        """ returns the parameter combination for a desired image index from an enumerable set of images. """
+        num_params = self.num_params()
+        c = np.unravel_index(idx, num_params)
+        params = [p[0][c[i]] for i, p in enumerate(self.params())]
+        # Caution changing the class methods: it is crucial that the index of params matches the correct parameter
+        if self.relative_sf:
+            params[2] /= params[1]  # params[2] is spatial_frequency and params[1] is size.
+        return params
+
+    def _parameter_converter(self):
+        """ Reads out the type of all the ordinary input arguments and converts them to attributes. """
+        for arg_key in self.arg_dict:
+            arg_value = self.arg_dict[arg_key]
+            if arg_key in ["canvas_size", "pixel_boundaries", "locations", "relative_sf", "eccentricities", "self"]:
+                pass  # exceptions
+            else:  # sizes, spatial_frequencies, contrasts, orientations, phases, grey_levels
+                if isinstance(arg_value, list):
+                    setattr(self, arg_key, arg_value)
+                elif isinstance(arg_value, FiniteSelection):
+                    sample = arg_value.sample()  # random sample of n values specified in sizes
+                    if isinstance(sample, list):
+                        setattr(self, arg_key, sample)
+                    else:
+                        raise TypeError("{}.sample() must be of type list.".format(arg_key))
+                elif isinstance(arg_value, FiniteParameter):
+                    if isinstance(arg_value.values, list):
+                        setattr(self, arg_key, arg_value.values)
+                    else:
+                        raise TypeError("{}.values must be of type list.".format(arg_key))
+                elif isinstance(arg_value, UniformRange):
+                    sample = arg_value.sample()
+                    if isinstance(sample, list):
+                        setattr(self, arg_key, sample)
+                    else:
+                        raise TypeError("{}.sample() must be of type list.".format(arg_key))
+                    if isinstance(arg_value.range, list):
+                        setattr(self, arg_key + "_range", arg_value.range)
+                    else:
+                        raise TypeError("{}.range must be of type list.".format(arg_key))
+
+    def stimulus(self, location_gabor, location_grating, size, spatial_frequency, contrast, orientation, phase, gamma,                            grey_level, **kwargs):
+        """
+        Args:
+            location_gabor (list of float): The center position of the Gabor.
+            location_gabor (list of float): The center position of the Grating.
+            size (float): The length of the longer axis of the ellipse of the Grating envelope.
+            spatial_frequency (float): The inverse of the wavelength of the cosine factor.
+            contrast (float): Defines the amplitude of the stimulus in %. Takes values from 0 to 1.
+            orientation (float): The orientation of the normal to the parallel stripes.
+            phase (float): The phase offset of the cosine factor.
+            gamma (float): The spatial aspect ratio reflecting the ellipticity of the Grating.
+            grey_level (float): The mean luminance.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns: Pixel intensities of the desired shifted grating stimulus as numpy.ndarray.
+        """
+        # calculate shifted location
+        # shift mask of grating to the other side of gabor location
+        shift = 2*(np.array(location_grating)-np.array(location_gabor))
+        shifted_location = np.array(location_grating) - shift
+
+        # basic coordinates
+        x, y = np.meshgrid(np.arange(self.canvas_size[0]),
+                           np.arange(self.canvas_size[1]))        
+        coords = np.stack([x.flatten(), y.flatten()])
+
+        # coordinates for grating (location_grating)
+        coords_grating = coords - np.array(location_grating)[:, None]
+
+        # coordinates for mask of shifted grating
+        coords_mask = coords - shifted_location[:,None]
+        coords_mask_x, coords_mask_y = coords_mask.reshape((2, ) + x.shape)
+        norm_xy = np.sqrt(coords_mask_x ** 2 +  coords_mask_y ** 2)
+        envelope = (norm_xy <= size/2)
+
+        # define grating
+        R = np.array([[np.cos(orientation), -np.sin(orientation)],
+                             [np.sin(orientation),  np.cos(orientation)]])
+        x, y = R.dot(coords_grating).reshape((2, ) + x.shape)        
+        grating = np.cos(spatial_frequency * x * (2*np.pi) + phase)
+        
+        # add contrast
+        amplitude = contrast * min(abs(self.pixel_boundaries[0] - grey_level),
+                                abs(self.pixel_boundaries[1] - grey_level))
+        
+        grating_contrast = amplitude * grating        
+        
+        # debug: show area around original location
+        # norm_xy_2 = np.sqrt(x ** 2 +  y ** 2)
+        # envelope_2 = (norm_xy_2 <= size/2)
+        # return (envelope | envelope_2) * grating_contrast
+        return envelope * grating_contrast
+
+    def _param_dict_for_search(self, locations_gabor, locations_grating, sizes, spatial_frequencies, contrasts, orientations,                                    phases, gammas, grey_levels):
+        """
+        Create a dictionary of all Grating parameters to an ax-friendly format.
+
+        Args:
+            locations: object from parameters.py module, defining the center of stimulus.
+            sizes: object from parameters.py module, defining the size of the Gaussian envelope.
+            spatial_frequencies: object from parameters.py module, defining the spatial frequency of grating.
+            contrasts: object from parameters.py module, defining the contrast of the image.
+            orientations: object from parameters.py module, defining the orientation of grating relative to envelope.
+            phases: object from parameters.py module, defining the phase offset of the grating.
+            gammas: object from parameters.py module, defining the spatial aspect ratio parameter of the envelope.
+            grey_levels: object from parameters.py module, defining the mean pixel intensity of the stimulus.
+
+        Returns:
+            dict of dict: dictionary of all parameters and their respective attributes, i.e. 'name, 'type', 'bounds' and
+                'log_scale'.
+        """
+        rn.seed(None)  # truely random samples
+
+        arg_dict = locals().copy()
+        del arg_dict['self']
+
+        param_dict = {}
+        for arg_key in arg_dict:
+            # eccentricities/gammas should be a log_scale parameter, all others not.
+            if arg_key in ["gammas"]:
+                log_scale = True
+            else:
+                log_scale = False
+
+            # 1.) "finite case" -> 'type' = choice (more than one value) or 'type' = fixed (only one value)
+            if isinstance(arg_dict[arg_key], FiniteParameter) or isinstance(arg_dict[arg_key], FiniteSelection):
+
+                # define the type configuration based on the number of list elements
+                if type(getattr(self, arg_key)) is list:
+                    if len(getattr(self, arg_key)) > 1:
+                        name_type = "choice"
+                    else:
+                        name_type = "fixed"
+
+                if arg_key == 'locations_gabor' or arg_key == 'locations_grating':  # exception handling #1: locations
+                    if name_type == "choice":
+                        # width
+                        name_width = arg_key[:-1] + "_width"
+                        param_dict[name_width] = {"name": name_width,
+                                                  "type": name_type,
+                                                  "values": [float(loc[0]) for loc in getattr(self, arg_key)],
+                                                  "log_scale": log_scale}
+                        # height
+                        name_height = arg_key[:-1] + "_height"
+                        param_dict[name_height] = {"name": name_height,
+                                                   "type": name_type,
+                                                   "values": [float(loc[1]) for loc in getattr(self, arg_key)],
+                                                   "log_scale": log_scale}
+                    elif name_type == "fixed":
+                        # width
+                        name_width = arg_key[:-1] + "_width"
+                        param_dict[name_width] = {"name": name_width,
+                                                  "type": name_type,
+                                                  "value": [float(loc[0]) for loc in getattr(self, arg_key)][0]}
+                        # height
+                        name_height = arg_key[:-1] + "_height"
+                        param_dict[name_height] = {"name": name_height,
+                                                   "type": name_type,
+                                                   "value": [float(loc[1]) for loc in getattr(self, arg_key)][0]}
+                elif arg_key == 'spatial_frequencies':  # exception handling #2: spatial_frequencies
+                    name = 'spatial_frequency'
+                    if name_type == "choice":
+                        param_dict[name] = {"name": name,
+                                            "type": name_type,
+                                            "values": getattr(self, arg_key),
+                                            "log_scale": log_scale}
+                    elif name_type == "fixed":
+                        param_dict[name] = {"name": name,
+                                            "type": name_type,
+                                            "value": getattr(self, arg_key)[0]}
+                else:
+                    name = arg_key[:-1]
+                    if name_type == "choice":
+                        param_dict[name] = {"name": name,
+                                            "type": name_type,
+                                            "values": getattr(self, arg_key),
+                                            "log_scale": log_scale}
+                    elif name_type == "fixed":
+                        param_dict[name] = {"name": name,
+                                            "type": name_type,
+                                            "value": getattr(self, arg_key)[0]}
+
+            # 2.) "infinite case" -> 'type' = range
+            elif isinstance(arg_dict[arg_key], UniformRange):
+                if arg_key == 'locations_gabor' or arg_key == 'locations_grating':
+                    range_name = arg_key + '_range'
+                    # width
+                    name_width = arg_key[:-1] + "_width"
+                    param_dict[name_width] = {"name": name_width,
+                                              "type": "range",
+                                              "bounds": getattr(self, range_name)[0],
+                                              "log_scale": log_scale}
+                    # height
+                    name_height = arg_key[:-1] + "_height"
+                    param_dict[name_height] = {"name": name_height,
+                                               "type": "range",
+                                               "bounds": getattr(self, range_name)[1],
+                                               "log_scale": log_scale}
+                elif arg_key == 'spatial_frequencies':
+                    name = 'spatial_frequency'
+                    range_name = arg_key + "_range"
+                    param_dict[name] = {"name": name,
+                                        "type": "range",
+                                        "bounds": getattr(self, range_name),
+                                        "log_scale": log_scale}
+                else:
+                    name = arg_key[:-1]
+                    range_name = arg_key + "_range"
+                    param_dict[name] = {"name": name,
+                                        "type": "range",
+                                        "bounds": getattr(self, range_name),
+                                        "log_scale": log_scale}
+
+            if gammas is None:
+                param_dict['gamma'] = {'name': 'gamma',
+                                       'type': 'fixed',
+                                       'value': 1.0}
+        return param_dict
+
+    def get_image_from_params(self, auto_params):
+        """
+        Generates the Grating corresponding to the parameters given in auto_params.
+
+        Args:
+            auto_params (dict): A dictionary which has the parameter names as keys and their realization as values, i.e.
+                {'location_width': value1, 'location_height': value2, 'size': value3, 'spatial_frequency' : ...}
+
+        Returns:
+            numpy.array: Pixel intensities of the desired Grating stimulus.
+
+        """
+        return self.stimulus(**auto_params)
+
+    def train_evaluate(self, auto_params, model, data_key, unit_idx):
+        """
+        Evaluates the activation of a specific neuron in an evaluated (e.g. nnfabrik) model given the Grating parameters.
+
+        Args:
+            auto_params (dict): A dictionary which has the parameter names as keys and their realization as values, i.e.
+                {'location_width': value1, 'location_height': value2, 'size': value3, 'spatial_frequency' : ...}
+            model (Encoder): evaluated model (e.g. nnfabrik) of interest.
+            data_key (str): session ID.
+            unit_idx (int): index of the desired model neuron.
+
+        Returns:
+            float: The activation of the Grating image of the model neuron specified in unit_idx.
+        """
+        auto_params_copy = auto_params.copy()
+        image = self.get_image_from_params(auto_params_copy)
+        image_tensor = torch.tensor(image).expand(1, 1, self.canvas_size[1], self.canvas_size[0]).float()
+        activation = model(image_tensor, data_key=data_key).detach().numpy().squeeze()
+        return float(activation[unit_idx])
+
+    def find_optimal_stimulus(self, model, data_key, unit_idx, total_trials=30):
+        """
+        Runs Bayesian parameter optimization to find optimal Grating (refer to https://ax.dev/docs/api.html).
+
+        Args:
+            model (Encoder): the underlying model of interest.
+            data_key (str): session ID of model.
+            unit_idx (int): unit index of desired neuron.
+            total_trials (int or None): number of optimization steps (default is 30 trials).
+
+        Returns
+            - list of dict: The list entries are dictionaries which store the optimal parameter combinations for the
+            corresponding unit. It has the variable name in the key and the optimal value in the values, i.e.
+            [{'location_width': value1, 'location_height': value2, 'size': value3, ...}, ...]
+            - list of tuple: The unit activations of the found optimal Grating of the form [({'activation': mean_unit1},
+            {'activation': {'activation': sem_unit1}}), ...].
+        """
+        if not hasattr(self, "auto_params"):
+            raise TypeError("find_optimal_stimulus search method only supports input parameters from module "
+                            "parameters.py")
+
+        parameters = list(self.auto_params.values())
+
+        # define helper function as input to 'optimize'
+        def train_evaluate_helper(auto_params):
+            return partial(self.train_evaluate, model=model, data_key=data_key, unit_idx=unit_idx)(auto_params)
+
+       # run Bayesian search
+        best_params, values, _, _ = optimize(parameters=parameters.copy(),
+                                             evaluation_function=train_evaluate_helper,
+                                             objective_name='activation',
+                                             total_trials=total_trials)
+        return best_params, values
+
+    def find_optimal_stimulus_bruteforce(self, model, data_key, batch_size=100, return_activations=False, unit_idx=None,
+                                         plotflag=False):
+        """
+        Finds optimal parameter combination for all units based on brute force testing method.
+
+        Args:
+            model (Encoder): The evaluated model as an encoder class.
+            data_key (char): data key or session ID of model.
+            batch_size (int or optional): number of images per batch.
+            return_activations (bool or None): return maximal activation alongside its parameter combination
+            unit_idx (int or None): unit index of the desired model neuron. If not specified, return the best
+                parameters for all model neurons (advised, because search is done for all units anyway).
+            plotflag (bool or None): if True, plots the evolution of the maximal activation of the number of images
+                tested (default: False).
+
+        Returns
+            - params (list of dict): The optimal parameter settings for each of the different units
+            - max_activation (np.array of float): The maximal firing rate for each of the units over all images tested
+        """
+        if any([isinstance(par, UniformRange) for par in list(self.arg_dict.values())]):
+            raise TypeError('This method needs inputs of type FiniteParameter or FiniteSelection.')
+
+        n_images = np.prod(self.num_params())  # number of all parameter combinations
+        n_units = model.readout[data_key].outdims  # number of units
+
+        max_act_evo = np.zeros((n_images + 1, n_units))  # init storage of maximal activation evolution
+        activations = np.zeros(n_units)  # init activation array for all tested images
+        
+        model.cuda()
+
+        # divide set of images in batches before showing it to the model
+        for batch_idx, batch in enumerate(self.image_batches(batch_size)):
+
+            if batch.shape[0] != batch_size:
+                batch_size = batch.shape[0]
+                
+            # create images and compute activation for current batch
+            images_batch = batch.reshape((batch_size,) + tuple(self.canvas_size))
+            images_batch = np.expand_dims(images_batch, axis=1)
+            images_batch = torch.tensor(images_batch).float().cuda()
+            activations_batch = model(images_batch, data_key=data_key).cpu().detach().numpy().squeeze()
+
+            if plotflag:  # evolution of maximal activation
+                for unit in range(0, n_units):
+                    for idx, act in enumerate(activations_batch):
+                        i = (idx + 1) + batch_idx * batch_size
+                        max_act_evo[i, unit] = max(act[unit], max_act_evo[i - 1, unit])
+
+            # max and argmax for current batch
+            activations = np.vstack([activations, activations_batch])
+
+        # delete the first row (only zeros) by which we initialized
+        activations = np.delete(activations, 0, axis=0)
+
+        # get maximal activations for each unit
+        max_activations = np.amax(activations, axis=0)
+
+        # get the image index of the maximal activations
+        argmax_activations = np.argmax(activations, axis=0)
+
+        params = [None] * n_units  # init list with parameter dictionaries
+        for unit, opt_param_idx in enumerate(argmax_activations):
+            params[unit] = self.params_dict_from_idx(opt_param_idx)
+
+        # plot the evolution of the maximal activation for each additional image
+        if plotflag:
+            fig, ax = plt.subplots()
+            for unit in range(0, n_units):
+                ax.plot(np.arange(0, n_images + 1), max_act_evo[:, unit])
+            plt.xlabel('Number of Images')
+            plt.ylabel('Maximal Activation')
+
+        # catch return options
+        if unit_idx is not None:
+            if return_activations:
+                return params[unit_idx], activations[unit_idx], max_activations[unit_idx]
+            else:
+                return params[unit_idx], activations[unit_idx]
+        else:
+            if return_activations:
+                return params, activations, max_activations
+            else:
+                return params, activations
