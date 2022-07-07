@@ -1,19 +1,20 @@
 import datajoint as dj
 import numpy as np
 
+import warnings
+
 from typing import Callable, Mapping, Dict, Any
 
 from torch.utils.data import DataLoader
 
 from nnfabrik.main import Dataset, schema
 from nnfabrik.utility.dj_helpers import make_hash
-from nnfabrik.utility.nnf_helper import dynamic_import, split_module_name, FabrikCache
+
+from .utils import parse_config, import_module
 
 Key = Dict[str, Any]
 Dataloaders = Dict[str, DataLoader]
 
-def import_module(path):
-    return dynamic_import(*split_module_name(path))
 
 @schema
 class InsilicoStimuliSet(dj.Lookup):
@@ -31,81 +32,47 @@ class InsilicoStimuliSet(dj.Lookup):
     fetch1: Callable
 
     import_func = staticmethod(import_module)
+    parse_stimulus_config = staticmethod(parse_config)
 
-    def add_set(self, stimulus_fn: str, stimulus_config: Mapping, comment: str = "") -> None:
-        self.insert1(
-            dict(
-                stimulus_fn=stimulus_fn,
-                stimulus_hash=make_hash(stimulus_config),
-                stimulus_config=stimulus_config,
-                stimulus_comment=comment,
-            )
+    def add_set(self, stimulus_fn: str, stimulus_config: Mapping, comment: str = "",
+                skip_duplicates: bool = False) -> None:
+        key = dict(
+            stimulus_fn=stimulus_fn,
+            stimulus_hash=make_hash(stimulus_config),
+            stimulus_config=stimulus_config,
+            stimulus_comment=comment,
         )
 
-    def parse_stimulus_config(self, stimulus_config):
+        existing = self.proj() & key
+        if existing:
+            if skip_duplicates:
+                warnings.warn("Corresponding entry found. Skipping...")
+                key = (self & (existing)).fetch1()
+            else:
+                raise ValueError("Corresponding entry already exists")
+        else:
+            self.insert1(key)
+
+        return key
+
+
+    def load(self, key: Key) -> np.ndarray:
         """
-        Parsing of the set config attributes to args and kwargs format, which is passable to the stimulus_fn
-        expecting it to be of the format
-        {
-            parameter1: {
-                path: path_to_type_function,
-                args: list_of_arguments (optional),
-                kwargs: dict_of_keyword_arguments (optional)
-            },
-            parameter2: {
-                path: path_to_type_function,
-                args: list_of_arguments (optional),
-                kwargs: dict_of_keyword_arguments (optional)
-            }
-        }
-        """
-
-        for key, value in stimulus_config.items():
-            if not isinstance(value, dict):
-                continue
-
-            attr_fn = self.import_func(value['path'])
-
-            if not 'args' in value:
-                value['args'] = []
-            if not 'kwargs' in value:
-                value['kwargs'] = {}
-
-            attr = attr_fn(*value['args'], **value['kwargs'])
-            stimulus_config[key] = attr
-
-        return stimulus_config
-
-    def images(self, key: Key) -> np.ndarray:
-        """
-        Returns the stimuli images given the set config.
+        Returns the stimuli set instance.
         """
         stimulus_fn, stimulus_config = (self & key).fetch1("stimulus_fn", "stimulus_config")
         stimulus_fn = self.import_func(stimulus_fn)
 
         stimulus_config = self.parse_stimulus_config(stimulus_config)
 
-        StimulusSet = stimulus_fn(**stimulus_config)
+        stimulus = stimulus_fn(**stimulus_config)
 
-        return StimulusSet.images()
-
-    def get_set(self, key: Key) -> np.ndarray:
-        """
-        Returns the stimuli images given the set config.
-        """
-        stimulus_fn, stimulus_config = (self & key).fetch1("stimulus_fn", "stimulus_config")
-        stimulus_fn = self.import_func(stimulus_fn)
-
-        stimulus_config = self.parse_stimulus_config(stimulus_config)
-
-        StimulusSet = stimulus_fn(**stimulus_config)
-
-        return StimulusSet
+        return stimulus
 
 
 @schema
 class ExperimentMethod(dj.Lookup):
-    """Table that contains Stimuli sets and their configurations."""
+    """Table that contains experiment methods and their configurations."""
     definition = """
         # contains methods for optimizing stimuli
         method_fn                           : varchar(128)   # name of the set function
@@ -120,50 +87,29 @@ class ExperimentMethod(dj.Lookup):
     fetch1: Callable
 
     import_func = staticmethod(import_module)
+    parse_method_config = staticmethod(parse_config)
 
-    def add_method(self, method_fn: str, method_config: Mapping, comment: str = "") -> None:
-        self.insert1(
-            dict(
-                method_fn=method_fn,
-                method_hash=make_hash(method_config),
-                method_config=method_config,
-                method_comment=comment,
-            )
+    def add_method(self, method_fn: str, method_config: Mapping, comment: str = "",
+                   skip_duplicates: bool = False) -> None:
+        key = dict(
+            method_fn=method_fn,
+            method_hash=make_hash(method_config),
+            method_config=method_config,
+            method_comment=comment,
         )
 
-    def parse_method_config(self, method_config):
-        """
-        Parsing of the set config attributes to args and kwargs format, which is passable to the stimulus_fn
-        expecting it to be of the format
-        {
-            parameter1: {
-                path: path_to_type_function,
-                args: list_of_arguments (optional),
-                kwargs: dict_of_keyword_arguments (optional)
-            },
-            parameter2: {
-                path: path_to_type_function,
-                args: list_of_arguments (optional),
-                kwargs: dict_of_keyword_arguments (optional)
-            }
-        }
-        """
+        existing = self.proj() & key
+        if existing:
+            if skip_duplicates:
+                warnings.warn("Corresponding entry found. Skipping...")
+                key = (self & (existing)).fetch1()
+            else:
+                raise ValueError("Corresponding entry already exists")
+        else:
+            self.insert1(key)
 
-        for key, value in method_config.items():
-            if not isinstance(value, dict) or "config_dict" in key:
-                continue
+        return key
 
-            attr_fn = self.import_func(value['path'])
-
-            if not 'args' in value:
-                value['args'] = []
-            if not 'kwargs' in value:
-                value['kwargs'] = {}
-
-            attr = attr_fn(*value['args'], **value['kwargs'])
-            method_config[key] = attr
-
-        return method_config
 
 @schema
 class ExperimentSeed(dj.Lookup):
